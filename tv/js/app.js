@@ -825,8 +825,7 @@ var Shelf = {
 		var h = '', focus = Home.area === 'grid';
 		for (var r = Shelf.top; r < Shelf.rows.length && r < Shelf.top + 2; r++) {
 			var row = Shelf.rows[r], y = (r - Shelf.top) * SH;
-			var credit = row.def && row.def.mix ? ' <img class="tmdb" src="' + imgUrl('tmdb.png') + '" alt="TMDB" />' : ''; // TMDB's terms
-			h += '<div id="st' + r + '" class="shelf-t' + (focus && r === Shelf.si ? ' active' : '') + '" style="top:' + y + 'px">' + esc(row.title) + credit + '</div>';
+			h += '<div id="st' + r + '" class="shelf-t' + (focus && r === Shelf.si ? ' active' : '') + '" style="top:' + y + 'px">' + esc(row.title) + '</div>';
 			for (var i = row.off; i < row.items.length && i < row.off + COLS; i++)
 				h += cardHtml('s' + r + '_' + i, row.items[i], focus && r === Shelf.si && i === row.idx, (i - row.off) * CW, y + 28, row.def && row.def.badge);
 		}
