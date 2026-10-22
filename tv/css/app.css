@@ -107,3 +107,5 @@ body.playing #app { display: none; }
 #menu .logo { color: #fff; }
 #menu .logo img { width: 24px; height: 24px; vertical-align: -4px; margin-right: 8px; }
 .hint .tmdb { width: 106px; height: 14px; vertical-align: -2px; }
+.st.trailer { color: #c9cbd1; }
+.st.trailer.focus { color: #111; }

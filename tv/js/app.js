@@ -757,6 +757,7 @@ var Item = {
 			if (!prev) Item.pickStart();
 			Item.act = 0;
 			Item.area = 'episodes';
+			Item.onTrailer = false;
 			UI.screen('item');
 			App.handler = Item;
 			Item.render();
@@ -797,8 +798,12 @@ var Item = {
 
 		var multi = Item.seasons.length > 1 || Item.seasons[0].number > 0;
 		var h = '';
+		var tabsFocus = Item.area === 'seasons';
 		if (multi) for (var s = 0; s < Item.seasons.length; s++)
-			h += '<span class="st' + (s === Item.si ? ' active' : '') + (Item.area === 'seasons' && s === Item.si ? ' focus' : '') + '">' + esc(Item.seasons[s].title) + '</span>';
+			h += '<span class="st' + (s === Item.si ? ' active' : '') + (tabsFocus && !Item.onTrailer && s === Item.si ? ' focus' : '') + '">' + esc(Item.seasons[s].title) + '</span>';
+		// series: the trailer is the last tab next to the seasons
+		if (multi && Item.trailerB64())
+			h += '<span class="st trailer' + (tabsFocus && Item.onTrailer ? ' focus' : '') + '">&#9654; Трейлер</span>';
 		$('seasons').innerHTML = h;
 		$('seasons').style.display = multi ? 'block' : 'none';
 
@@ -908,9 +913,16 @@ var Item = {
 		if (k === K.RETURN) { Home.open(); return; }
 		if (k === K.GREEN) { Item.quality = (Item.quality + 1) % QUALITIES.length; Item.render(); return; }
 		if (Item.area === 'seasons') {
-			if (k === K.LEFT && Item.si > 0) { Item.si--; Item.ei = 0; Item.top = 0; }
-			else if (k === K.RIGHT && Item.si < Item.seasons.length - 1) { Item.si++; Item.ei = 0; Item.top = 0; }
-			else if (k === K.DOWN || k === K.ENTER) Item.area = 'episodes';
+			if (Item.onTrailer && (k === K.ENTER || k === K.PLAY)) { Item.playTrailer(); return; }
+			if (k === K.LEFT) {
+				if (Item.onTrailer) Item.onTrailer = false;
+				else if (Item.si > 0) { Item.si--; Item.ei = 0; Item.top = 0; }
+			}
+			else if (k === K.RIGHT) {
+				if (Item.si < Item.seasons.length - 1 && !Item.onTrailer) { Item.si++; Item.ei = 0; Item.top = 0; }
+				else if (Item.trailerB64()) Item.onTrailer = true;
+			}
+			else if (k === K.DOWN || k === K.ENTER) { Item.onTrailer = false; Item.area = 'episodes'; }
 			Item.render();
 			return;
 		}
@@ -927,7 +939,7 @@ var Item = {
 		}
 		if (k === K.UP) {
 			if (Item.ei > 0) Item.ei--;
-			else if (Item.seasons.length > 1) Item.area = 'seasons';
+			else if (Item.seasons.length > 1 || (Item.seasons[0].number && Item.trailerB64())) Item.area = 'seasons';
 		}
 		else if (k === K.DOWN && Item.ei < eps.length - 1) Item.ei++;
 		else if (k === K.CH_DOWN) Item.ei = Math.min(eps.length - 1, Item.ei + Item.VISIBLE);
