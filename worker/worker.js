@@ -325,7 +325,8 @@ async function appFile(env, base, path) {
     const n = (version.split(".").map((x) => parseInt(x, 10) || 0).concat([0, 0]));
     const build = n[0] * 1000 + n[1] * 10 + n[2];
     return json(200, { version: n[0] + "." + (build % 1000), build, js: "js/app-" + version + ".js", css: "css/app-" + version + ".css" },
-      { "Cache-Control": "max-age=60" });
+      // no-store: the TV's browser kept an older answer past its max-age and missed an update
+      { "Cache-Control": "no-store, no-cache, must-revalidate", Pragma: "no-cache", Expires: "0" });
   }
   const code = { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "public, max-age=31536000", ...CORS };
   if (/^js\/app-[\d.]+\.js$/.test(path)) {
