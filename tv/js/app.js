@@ -260,7 +260,8 @@ var SORTS = [{ id: '-created', title: 'новые' }, { id: '-views', title: 'п
 
 // "Главная": the shelves Kinopub's own front page shows.
 var SHELVES = [
-	{ title: 'Для тебя', recs: true },
+	// taken in turns from the film / series / anime shelves of "Для тебя"
+	{ title: 'Для тебя', recs: true, mix: ['movie', 'serial', 'anime'] },
 	{ title: 'Популярные фильмы', path: 'items/popular?type=movie' },
 	{ title: 'Новые фильмы', path: 'items/fresh?type=movie' },
 	{ title: 'Популярные сериалы', path: 'items/popular?type=serial' },
@@ -763,10 +764,34 @@ var Shelf = {
 					Home.remember();
 					Shelf.render();
 				};
-				if (sh.recs) Net.get('/recs' + (sh.recs === true ? '' : '?cat=' + sh.recs), got, function () {});
+				if (sh.mix) Shelf.mix(sh.mix, got);
+				else if (sh.recs) Net.get('/recs' + (sh.recs === true ? '' : '?cat=' + sh.recs), got, function () {});
 				else Net.api(sh.path + '&perpage=24', got, function () {});
 			})(row, list[i]);
 		}
+	},
+
+	// Fetch several recommendation categories and interleave them: film, series, anime, film, ...
+	mix: function (cats, done) {
+		var lists = [], left = cats.length;
+		var finish = function () {
+			if (--left > 0) return;
+			var out = [], seen = {};
+			for (var i = 0; out.length < 24; i++) {
+				var any = false;
+				for (var c = 0; c < lists.length; c++) {
+					var it = lists[c] && lists[c][i];
+					if (!it) continue;
+					any = true;
+					if (!seen[it.id]) { seen[it.id] = true; out.push(it); }
+				}
+				if (!any) break;
+			}
+			done({ items: out });
+		};
+		for (var c = 0; c < cats.length; c++) (function (c) {
+			Net.get('/recs?cat=' + cats[c], function (r) { lists[c] = r.items || []; finish(); }, function () { finish(); });
+		})(c);
 	},
 
 	render: function () {
