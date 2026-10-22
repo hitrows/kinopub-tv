@@ -118,3 +118,5 @@ body.playing #app { display: none; }
 .flag.sel { border-color: #6cc788; }
 .flag.focus { border-color: #02b875; background: #02b875; }
 .srv-label { margin-top: 6px; font-size: 14px; color: #8a8d95; }
+#nextUp { display: none; position: absolute; right: 30px; top: 30px; padding: 12px 18px; background: rgba(23,23,27,0.9); border-left: 4px solid #02b875; color: #fff; font-size: 18px; }
+#osdHints .k { width: 12px; height: 12px; margin-right: 2px; }

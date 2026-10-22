@@ -10,6 +10,10 @@
 //   GET /auth/refresh?rt=           -> refreshed token JSON
 //   GET /api/<path>?<query>         -> Kinopub /v1/<path>; URLs rewritten through this worker
 //                                      (?_post=1: sent as a form POST with the other params)
+//   GET /item?id=                   -> an item page without per-episode media (a long series
+//                                      is megabytes otherwise); full item cached for /media
+//   GET /media?id=&mid=             -> files, audio tracks and subtitles of one video/episode
+//   GET /continue                   -> unfinished films and series, most recent first
 //   GET /search?q=                  -> Kinopub search; a Latin query that finds little is
 //                                      retried with the Russian titles TMDB knows for it
 //   GET /s/<b64>/<name>             -> posters etc.; .m3u8 playlists are rewritten
@@ -57,6 +61,9 @@ export default {
       if (p.startsWith("/app/")) return await appFile(env, base, p.slice(5));
       if (p === "/recs") return await recs(request, env, base, ctx);
       if (p === "/search") return await search(request, env, base);
+      if (p === "/item") return await itemPage(request, base, ctx);
+      if (p === "/media") return await media(request, base, ctx);
+      if (p === "/continue") return await continueWatching(request, base);
       if (p === "/" || p === "/health") return json(200, { ok: true, service: "kp-orsay" });
       return json(404, { error: "not_found" });
     } catch (e) {
@@ -369,7 +376,6 @@ const norm = (t) => String(t || "").toLowerCase().replace(/ё/g, "е").replace(/
 // own 50-subrequest budget) and is seeded by what was watched in that
 // category, so a run of anime doesn't push movies and series out.
 const CATS = {
-  all: { kp: () => true, tmdb: (r) => !tmdbKids(r), balanced: true, fill: "items/hot?type=movie" },
   new: { kp: (it) => (it.year || 0) >= thisYear() - 1, tmdb: (r) => yearOf(r) >= thisYear() - 1 && !tmdbKids(r), balanced: true, fill: "items/fresh?type=movie" },
   movie: { kp: (it) => !TV_TYPES.includes(it.type) && it.type !== "concert" && !isAnime(it) && !isDoc(it),
     tmdb: (r, media) => media === "movie" && !tmdbAnime(r) && !tmdbKids(r) && !has(r, 99) && !has(r, 10402), fill: "items/popular?type=movie" },
@@ -394,14 +400,15 @@ async function recs(request, env, base, ctx) {
   const tok = request.headers.get("X-KP-Token");
   if (!tok) return json(401, { error: "not_authorized" });
   if (!env.TMDB_TOKEN) return json(200, { items: [], error: "no_tmdb_token" });
-  const catName = new URL(request.url).searchParams.get("cat") || "all";
-  const cat = CATS[catName] || CATS.all;
+  let catName = new URL(request.url).searchParams.get("cat");
+  if (!CATS[catName]) catName = "new";
+  const cat = CATS[catName];
 
   const cacheKey = new Request("https://kp-orsay.cache/recs/v5/" + catName + "/" + (await sha(tok)));
   const cached = await caches.default.match(cacheKey);
   if (cached) return cached;
 
-  const hist = await kp(tok, "history?perpage=50");
+  const hist = await history(tok, ctx);
   const seen = new Set(), strong = [], weak = [];
   for (const h of (hist && hist.history) || []) {
     const it = h.item;
@@ -519,4 +526,92 @@ async function search(request, env, base) {
     for (const res of more) for (const it of (res && res.items) || []) if (!have.has(it.id)) { have.add(it.id); items.push(it); }
   }
   return json(200, rewrite({ items: items.map(slimItem) }, base));
+}
+
+/* ---------- per-user caches ---------- */
+
+// The six "Для тебя" shelves and "Продолжить" all start from the history:
+// fetch it once per user every 10 minutes instead of on every request.
+async function cached(key, ttl, ctx, make) {
+  const req = new Request("https://kp-orsay.cache/" + key);
+  const hit = await caches.default.match(req);
+  if (hit) return hit.json();
+  const value = await make();
+  if (value) ctx.waitUntil(caches.default.put(req, new Response(JSON.stringify(value), { headers: { "Cache-Control": "public, max-age=" + ttl } })));
+  return value;
+}
+
+async function history(tok, ctx) {
+  return cached("hist/" + (await sha(tok)), 600, ctx, () => kp(tok, "history?perpage=50"));
+}
+
+/* ---------- item pages ---------- */
+
+// A series' item carries every format, audio track and subtitle of every
+// episode: The Simpsons is 4 MB, seconds of parsing on a 2013 TV. The page
+// gets only what it shows; one episode's media comes from /media on play.
+async function fullItem(tok, id, ctx, fresh) {
+  const key = "item/" + (await sha(tok)) + "/" + id;
+  if (fresh) {
+    const res = await kp(tok, "items/" + id);
+    if (res && res.item) ctx.waitUntil(caches.default.put(new Request("https://kp-orsay.cache/" + key),
+      new Response(JSON.stringify(res), { headers: { "Cache-Control": "public, max-age=900" } })));
+    return res;
+  }
+  return cached(key, 900, ctx, () => kp(tok, "items/" + id));
+}
+
+const slimVideo = (v) => ({ id: v.id, number: v.number, title: v.title, duration: v.duration, watched: v.watched, watching: v.watching });
+
+async function itemPage(request, base, ctx) {
+  const tok = request.headers.get("X-KP-Token");
+  if (!tok) return json(401, { error: "not_authorized" });
+  const id = parseInt(new URL(request.url).searchParams.get("id"), 10);
+  const res = await fullItem(tok, id, ctx, true); // always fresh: watching positions change
+  if (!res || !res.item) return json(404, { error: "not_found" });
+  const it = res.item, out = {};
+  for (const k of ["id", "type", "title", "year", "countries", "genres", "plot", "kinopoisk_rating", "imdb_rating", "posters", "trailer"]) out[k] = it[k];
+  if (out.posters) out.posters = { medium: it.posters.medium };
+  if (it.seasons) out.seasons = it.seasons.map((s) => ({ number: s.number, episodes: (s.episodes || []).map(slimVideo) }));
+  else out.videos = (it.videos || []).map(slimVideo);
+  return json(200, rewrite({ item: out }, base));
+}
+
+async function media(request, base, ctx) {
+  const tok = request.headers.get("X-KP-Token");
+  if (!tok) return json(401, { error: "not_authorized" });
+  const q = new URL(request.url).searchParams;
+  const id = parseInt(q.get("id"), 10), mid = parseInt(q.get("mid"), 10);
+  const res = await fullItem(tok, id, ctx, false);
+  const it = res && res.item;
+  let v = null;
+  for (const s of (it && it.seasons) || []) for (const e of s.episodes || []) if (e.id === mid) v = e;
+  for (const e of (it && it.videos) || []) if (e.id === mid) v = e;
+  if (!v) return json(404, { error: "not_found" });
+  return json(200, rewrite({
+    files: (v.files || []).map((f) => ({ quality: f.quality, w: f.w, h: f.h, url: { http: f.url.http, hls: f.url.hls } })),
+    audios: (v.audios || []).map((a) => ({ index: a.index, lang: a.lang, codec: a.codec, type: a.type && { title: a.type.title }, author: a.author && { title: a.author.title } })),
+    subtitles: (v.subtitles || []).map((t) => ({ lang: t.lang, shift: t.shift, forced: t.forced, url: t.url })),
+  }, base));
+}
+
+/* ---------- continue watching ---------- */
+
+// Unfinished films and series in the order they were last watched.
+async function continueWatching(request, base) {
+  const tok = request.headers.get("X-KP-Token");
+  if (!tok) return json(401, { error: "not_authorized" });
+  const [hist, mv, sr] = await Promise.all([kp(tok, "history?perpage=50"), kp(tok, "watching/movies"), kp(tok, "watching/serials")]);
+  const open = new Map();
+  for (const it of [...((mv && mv.items) || []), ...((sr && sr.items) || [])]) open.set(it.id, it);
+  const out = [], seen = new Set();
+  for (const h of (hist && hist.history) || []) {
+    const it = h.item;
+    if (!it || seen.has(it.id) || !open.has(it.id)) continue;
+    seen.add(it.id);
+    out.push({ ...slimItem(open.get(it.id)), posters: { small: (it.posters || open.get(it.id).posters || {}).small } });
+  }
+  // anything unfinished that isn't in the recent history goes last
+  for (const [id, it] of open) if (!seen.has(id)) out.push(slimItem(it));
+  return json(200, rewrite({ items: out.slice(0, 24) }, base));
 }

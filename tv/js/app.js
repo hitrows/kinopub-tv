@@ -135,6 +135,7 @@ var Net = {
 			else if (status === 401 && CLOUD && !retried)
 				Net.refresh(function (good) { if (good) Net.get(path, ok, fail, true); else App.showAuth(); });
 			else if (status === 401) App.showAuth();
+			else if (status === 0 && !retried && path.indexOf('_post=1') < 0) setTimeout(function () { Net.get(path, ok, fail, true); }, 1500);
 			else if (status === 0) (fail || Net.fail)('Сервер не отвечает');
 			else (fail || Net.fail)((data && data.error) ? data.error : 'Ошибка сети (' + status + ')');
 		});
@@ -183,7 +184,6 @@ var Screen = {
 		if (w > 100 && h > 100) { Screen.w = w; Screen.h = h; }
 		try { var u = parseInt(window.localStorage.getItem('kp_zoom'), 10); if (u >= 0 && u < Screen.USER.length) Screen.user = u; } catch (e) {}
 		Screen.apply();
-		Screen.report();
 	},
 
 	apply: function () {
@@ -209,17 +209,9 @@ var Screen = {
 		Screen.timer = setTimeout(function () { z.style.display = 'none'; }, 1500);
 	},
 
-	// Tell the server what the TV reports, so issues can be diagnosed from its log.
+	// Errors go to the server log (docker logs / wrangler tail) for diagnosis.
 	log: function (ev) {
 		try { var x = new XMLHttpRequest(); x.open('GET', PROXY + '/log?v=' + VERSION + '&ev=' + encodeURIComponent(ev), true); x.send(null); } catch (e) {}
-	},
-	report: function () {
-		try {
-			var x = new XMLHttpRequest();
-			x.open('GET', PROXY + '/log?v=' + VERSION + '&keys=' + [K.PLAY, K.PAUSE, K.STOP, K.FF, K.RW].join(',') + '&reported=' + Screen.reported + '&w=' + Screen.w + '&h=' + Screen.h + '&sw=' + screen.width + '&sh=' + screen.height +
-				'&user=' + Screen.user + '&ua=' + encodeURIComponent(navigator.userAgent), true);
-			x.send(null);
-		} catch (e) {}
 	}
 };
 
@@ -260,6 +252,8 @@ var SORTS = [{ id: '-created', title: 'новые' }, { id: '-views', title: 'п
 
 // "Главная": the shelves Kinopub's own front page shows.
 var SHELVES = [
+	// unfinished films and series: OK resumes right away
+	{ title: 'Продолжить просмотр', cont: true, recs: true, badge: 'new' },
 	// taken in turns from the film / series / anime shelves of "Для тебя"
 	{ title: 'Для тебя', recs: true, mix: ['movie', 'serial', 'anime'] },
 	{ title: 'Популярные фильмы', path: 'items/popular?type=movie' },
@@ -341,7 +335,10 @@ var Home = {
 		App.handler = Home;
 		Home.renderMenu();
 		if (!Home.inited) { Home.inited = true; Home.load(Home.sec); Home.loadServer(); }
-		else Home.renderGrid();
+		else {
+			if (SECTIONS[Home.sec].shelves) Shelf.ensure(); // e.g. "Продолжить" after watching
+			Home.renderGrid();
+		}
 	},
 
 	sortIdx: function () { return Home.sorts[Home.sec] || 0; },
@@ -421,11 +418,11 @@ var Home = {
 
 	cacheKey: function (sec) { return sec + '|' + (Home.sorts[sec] || 0); },
 
-	// Lists stay fresh for 5 minutes; what you're watching / history for 1.
+	// Lists stay fresh for 5 minutes, history for 1.
 	fromCache: function (sec) {
 		var s = SECTIONS[sec], c = Home.cache[Home.cacheKey(sec)];
 		if (!c || s.search || (Home.folder && sec === Home.sec)) return false;
-		var ttl = (s.watching || s.history) ? 60000 : 300000;
+		var ttl = s.history ? 60000 : 300000;
 		if (+new Date() - c.ts > ttl) return false;
 		Home.sec = sec; Home.folder = null; Home.seen = {};
 		Home.reqId++; Home.loadingMore = false; UI.loading(false);
@@ -433,7 +430,11 @@ var Home = {
 		$('home').className = 'screen';
 		$('searchBox').style.display = 'none';
 		Home.idx = 0; Home.top = 0;
-		if (s.shelves) { Shelf.rows = c.rows; Shelf.si = 0; Shelf.top = 0; for (var i = 0; i < c.rows.length; i++) { c.rows[i].idx = 0; c.rows[i].off = 0; } }
+		if (s.shelves) {
+			Shelf.rows = c.rows; Shelf.si = 0; Shelf.top = 0;
+			for (var i = 0; i < c.rows.length; i++) { c.rows[i].idx = 0; c.rows[i].off = 0; }
+			Shelf.ensure();
+		}
 		else { Home.items = c.items.slice(0); Home.page = c.page; Home.pages = c.pages; }
 		Home.renderGrid();
 		return true;
@@ -442,8 +443,10 @@ var Home = {
 	remember: function () {
 		var s = SECTIONS[Home.sec];
 		if (s.search || Home.folder) return;
+		// at most two pages per list, so a long evening in History doesn't eat the TV's memory
+		var page = Math.min(Home.page, 2);
 		Home.cache[Home.cacheKey(Home.sec)] = s.shelves ? { rows: Shelf.rows, ts: +new Date() }
-			: { items: Home.items.slice(0), page: Home.page, pages: Home.pages, ts: +new Date() };
+			: { items: Home.items.slice(0, page * 30), page: page, pages: Home.pages, ts: +new Date() };
 	},
 
 	load: function (sec, keepFolder) {
@@ -480,8 +483,6 @@ var Home = {
 				}
 				return out;
 			} };
-		if (s.recs)
-			return { raw: '/recs', parse: function (r) { return r.items || []; } };
 		if (s.bookmarks && Home.folder)
 			return { path: 'bookmarks/' + Home.folder.id + '?perpage=30&page=' + page, parse: function (r) { return r.items || []; } };
 		if (s.bookmarks)
@@ -510,16 +511,8 @@ var Home = {
 			Home.remember();
 			Home.renderGrid();
 		};
-		if (s.watching) {
-			// Series with new episodes first, then unfinished movies.
-			Net.api('watching/serials?subscribed=1', function (a) {
-				Net.api('watching/movies', function (b) { done((a.items || []).concat(b.items || []), null); }, fail);
-			}, fail);
-			return;
-		}
 		var req = Home.request(Home.page + 1);
-		var got = function (r) { done(req.parse(r), r.pagination || null); };
-		if (req.raw) Net.get(req.raw, got, fail); else Net.api(req.path, got, fail);
+		Net.api(req.path, function (r) { done(req.parse(r), r.pagination || null); }, fail);
 	},
 
 	doSearch: function () {
@@ -550,7 +543,7 @@ var Home = {
 		for (var i = from; i < to; i++) {
 			var it = Home.items[i];
 			var r = Math.floor(i / COLS) - Home.top, c = i % COLS;
-			h += cardHtml('g' + i, it, Home.area === 'grid' && i === Home.idx, c * CW, r * RH, SECTIONS[Home.sec].badge);
+			h += cardHtml('g' + i, it, Home.area === 'grid' && i === Home.idx, c * CW, r * RH);
 		}
 		$('grid').innerHTML = h;
 		$('gridEmpty').innerHTML = Home.items.length ? '' : (SECTIONS[Home.sec].search ? (Home.query.length < 2 ? 'Набери название пультом' : 'Ничего не нашлось') : 'Пусто');
@@ -749,25 +742,58 @@ var Shelf = {
 
 	load: function () {
 		Shelf.rows = []; Shelf.si = 0; Shelf.top = 0;
-		var id = Home.reqId;
-		UI.loading(true);
 		var list = SECTIONS[Home.sec].shelves;
 		if (!(list instanceof Array)) list = SHELVES;
-		for (var i = 0; i < list.length; i++) {
-			var row = { title: list[i].title, items: [], idx: 0, off: 0 };
-			Shelf.rows.push(row);
-			(function (row, sh) {
-				var got = function (r) {
-					if (id !== Home.reqId) return;
-					UI.loading(false);
-					row.items = r.items || [];
-					Home.remember();
-					Shelf.render();
-				};
-				if (sh.mix) Shelf.mix(sh.mix, got);
-				else if (sh.recs) Net.get('/recs' + (sh.recs === true ? '' : '?cat=' + sh.recs), got, function () {});
-				else Net.api(sh.path + '&perpage=24', got, function () {});
-			})(row, list[i]);
+		for (var i = 0; i < list.length; i++)
+			Shelf.rows.push({ title: list[i].title, def: list[i], items: [], idx: 0, off: 0, state: 'idle' });
+		UI.loading(true);
+		Shelf.ensure();
+	},
+
+	// Load the rows on screen and the next one; the rest wait until scrolled to.
+	ensure: function () {
+		for (var r = Shelf.top; r < Shelf.rows.length && r < Shelf.top + 3; r++) Shelf.fetch(Shelf.rows[r]);
+	},
+
+	fetch: function (row) {
+		if (row.state !== 'idle') return;
+		row.state = 'loading';
+		var id = Home.reqId, sh = row.def;
+		var got = function (r) {
+			if (id !== Home.reqId) { row.state = 'idle'; return; } // section left meanwhile
+			UI.loading(false);
+			row.items = r.items || [];
+			row.state = 'done';
+			Home.remember();
+			Shelf.later();
+		};
+		var failed = function () { row.state = id === Home.reqId ? 'done' : 'idle'; if (id === Home.reqId) { UI.loading(false); Shelf.later(); } };
+		if (sh.cont) Net.get('/continue', got, failed);
+		else if (sh.mix) Shelf.mix(sh.mix, got);
+		else if (sh.recs) Net.get('/recs?cat=' + sh.recs, got, failed);
+		else Net.api(sh.path + '&perpage=24', got, failed);
+	},
+
+	// Several rows arriving together are drawn once.
+	later: function () {
+		if (Shelf.timer) return;
+		Shelf.timer = setTimeout(function () { Shelf.timer = null; Shelf.prune(); if (Home.sec >= 0 && SECTIONS[Home.sec].shelves) Shelf.render(); }, 40);
+	},
+
+	staleContinue: function () {
+		var all = [Shelf.rows];
+		for (var k in Home.cache) if (Home.cache[k].rows) all.push(Home.cache[k].rows);
+		for (var a = 0; a < all.length; a++)
+			for (var r = 0; r < all[a].length; r++) if (all[a][r].def && all[a][r].def.cont) all[a][r].state = 'idle';
+	},
+
+	// Rows that came back empty are dropped so the focus never lands on nothing.
+	prune: function () {
+		for (var r = Shelf.rows.length - 1; r >= 0; r--) {
+			if (Shelf.rows[r].state !== 'done' || Shelf.rows[r].items.length) continue;
+			Shelf.rows.splice(r, 1);
+			if (Shelf.si > r || Shelf.si >= Shelf.rows.length) Shelf.si = Math.max(0, Shelf.si - 1);
+			if (Shelf.top > r || Shelf.top >= Shelf.rows.length) Shelf.top = Math.max(0, Shelf.top - 1);
 		}
 	},
 
@@ -800,7 +826,7 @@ var Shelf = {
 			var row = Shelf.rows[r], y = (r - Shelf.top) * SH;
 			h += '<div id="st' + r + '" class="shelf-t' + (focus && r === Shelf.si ? ' active' : '') + '" style="top:' + y + 'px">' + esc(row.title) + '</div>';
 			for (var i = row.off; i < row.items.length && i < row.off + COLS; i++)
-				h += cardHtml('s' + r + '_' + i, row.items[i], focus && r === Shelf.si && i === row.idx, (i - row.off) * CW, y + 28);
+				h += cardHtml('s' + r + '_' + i, row.items[i], focus && r === Shelf.si && i === row.idx, (i - row.off) * CW, y + 28, row.def && row.def.badge);
 		}
 		$('grid').innerHTML = h;
 		$('gridEmpty').innerHTML = '';
@@ -808,6 +834,7 @@ var Shelf = {
 
 	key: function (k) {
 		var row = Shelf.rows[Shelf.si];
+		if (!row) { if (k === K.LEFT || k === K.RETURN) { Home.area = 'menu'; Home.renderMenu(); } return; }
 		var oSi = Shelf.si, oTop = Shelf.top, oIdx = row.idx, oOff = row.off;
 		if (k === K.LEFT) {
 			if (row.idx > 0) { row.idx--; if (row.idx < row.off) row.off = row.idx; }
@@ -817,7 +844,8 @@ var Shelf = {
 		else if (k === K.UP && Shelf.si > 0) { Shelf.si--; if (Shelf.si < Shelf.top) Shelf.top = Shelf.si; }
 		else if (k === K.DOWN && Shelf.si < Shelf.rows.length - 1) { Shelf.si++; if (Shelf.si > Shelf.top + 1) Shelf.top = Shelf.si - 1; }
 		else if (k === K.RETURN) { Home.area = 'menu'; Home.renderMenu(); }
-		else if (k === K.ENTER && row.items[row.idx]) { Item.open(row.items[row.idx].id); return; }
+		else if (k === K.ENTER && row.items[row.idx]) { Item.open(row.items[row.idx].id, false, !!(row.def && row.def.cont)); return; }
+		if (Shelf.top !== oTop) Shelf.ensure();
 		if (Home.area !== 'grid') { setClass('s' + oSi + '_' + oIdx, 'focus', false); setClass('st' + oSi, 'active', false); return; }
 		// redraw only when the visible window scrolled
 		if (Shelf.top !== oTop || row.off !== oOff) { Shelf.render(); return; }
@@ -834,9 +862,11 @@ var Item = {
 	data: null, seasons: [], si: 0, ei: 0, top: 0, area: 'episodes',
 	quality: 0, VISIBLE: 7, act: 0,
 
-	open: function (id, keepPos) {
+	open: function (id, keepPos, autoplay) {
 		UI.loading(true);
-		Net.api('items/' + id, function (r) {
+		// the cloud build gets a page without per-episode media (a long series is megabytes otherwise)
+		var load = CLOUD ? function (ok) { Net.get('/item?id=' + id, ok); } : function (ok) { Net.api('items/' + id, ok); };
+		load(function (r) {
 			UI.loading(false);
 			var it = r.item;
 			var prev = Item.data && Item.data.id === it.id && keepPos;
@@ -855,7 +885,10 @@ var Item = {
 			Item.tabOff = 0;
 			UI.screen('item');
 			App.handler = Item;
+			Item.renderStatic();
 			Item.render();
+			// "Продолжить просмотр": straight into the player where it stopped
+			if (autoplay) Item.play(false);
 		});
 	},
 
@@ -876,7 +909,8 @@ var Item = {
 		if (Item.ei >= Item.top + Item.VISIBLE) Item.top = Item.ei - Item.VISIBLE + 1;
 	},
 
-	render: function () {
+	// What doesn't change while moving around the page: drawn once per open.
+	renderStatic: function () {
 		var it = Item.data;
 		$('itemPoster').src = it.posters ? it.posters.medium : '';
 		$('itemTitle').innerHTML = esc(it.title);
@@ -890,7 +924,9 @@ var Item = {
 		$('itemMeta').innerHTML = esc(meta.join('  ·  '));
 		$('itemPlot').innerHTML = esc(it.plot);
 		Item.renderHints();
+	},
 
+	render: function () {
 		var multi = Item.seasons.length > 1 || Item.seasons[0].number > 0;
 		var h = '';
 		if (multi) {
@@ -992,6 +1028,19 @@ var Item = {
 
 	play: function (fromStart) {
 		var ep = Item.current();
+		if (CLOUD && !ep.files) {
+			UI.loading(true);
+			Net.get('/media?id=' + Item.data.id + '&mid=' + ep.id, function (m) {
+				UI.loading(false);
+				ep.files = m.files; ep.audios = m.audios; ep.subtitles = m.subtitles;
+				Item.play(fromStart);
+			}, function (msg) {
+				// switching episodes from the player: don't strand it on a black screen
+				if (document.body.className === 'playing') { Player.active = true; Player.stop(); }
+				Net.fail(msg);
+			});
+			return;
+		}
 		var f = Item.pickFile(ep);
 		if (!f) { UI.toast('Нет подходящего файла'); return; }
 		var w = ep.watching || {};
@@ -1007,18 +1056,34 @@ var Item = {
 		});
 	},
 
-	// Called by the player when an episode finishes.
-	next: function () {
-		var eps = Item.seasons[Item.si].eps;
-		if (Item.ei + 1 < eps.length) Item.ei++;
-		else if (Item.si + 1 < Item.seasons.length) { Item.si++; Item.ei = 0; }
-		else return false;
+	// The episode before (d = -1) or after (d = 1) the current one, across seasons.
+	hasNeighbour: function (d) {
+		if (!Item.data || Item.single()) return null;
+		var si = Item.si, ei = Item.ei + d;
+		while (si >= 0 && si < Item.seasons.length) {
+			var n = Item.seasons[si].eps.length;
+			if (ei >= 0 && ei < n) return { si: si, ei: ei };
+			si += d;
+			if (si < 0 || si >= Item.seasons.length) break;
+			ei = d > 0 ? 0 : Item.seasons[si].eps.length - 1;
+		}
+		return null;
+	},
+
+	// Play the neighbouring episode; false when there's none.
+	step: function (d) {
+		var to = Item.hasNeighbour(d);
+		if (!to) return false;
+		Item.si = to.si; Item.ei = to.ei;
 		Item.scroll();
 		var ep = Item.current();
-		if (ep.watching) ep.watching = { status: -1, time: 0 };
+		if (d > 0 && ep.watching && ep.watching.status === 1) ep.watching = { status: -1, time: 0 }; // rewatch from the start
 		Item.play();
 		return true;
 	},
+
+	// Called by the player when an episode finishes.
+	next: function () { return Item.step(1); },
 
 	// Red key: put the title into the "Посмотреть" bookmark folder, or take it out.
 	toWatch: null,      // {id, title} of that folder
@@ -1085,7 +1150,7 @@ var Item = {
 		if (k === K.RETURN) { Home.open(); return; }
 		// colour keys in remote order: red "Посмотреть", green quality, yellow watched, blue trailer
 		if (k === K.RED) { Item.toggleToWatch(); return; }
-		if (k === K.GREEN) { Item.quality = (Item.quality + 1) % QUALITIES.length; Item.render(); return; }
+		if (k === K.GREEN) { Item.quality = (Item.quality + 1) % QUALITIES.length; Item.renderHints(); return; }
 		if (k === K.YELLOW) { Item.toggleWatched(); return; }
 		if (k === K.BLUE) { Item.playTrailer(); return; }
 		if (Item.area === 'seasons') {
@@ -1125,6 +1190,7 @@ var Player = {
 	seekTarget: null, seekTimer: null, osdTimer: null, saveTimer: null, lastSaved: 0,
 	menu: false, track: 0, menuIdx: 0, retries: 0,
 	sub: -1, subPref: null, cues: [], cueText: '', stamp: 0, subTimer: null,
+	hold: null, holdSeen: false, nextAt: null, nextOff: false,
 
 	init: function () {
 		var p = $('pluginPlayer');
@@ -1155,10 +1221,11 @@ var Player = {
 	play: function (v) {
 		Player.v = v;
 		Player.gotTime = false;
-		Screen.log('player_play start=' + (v.start || 0) + ' area=' + Screen.w + 'x' + Screen.h);
 		Player.time = v.start || 0; Player.duration = v.duration || 0;
 		Player.paused = false; Player.active = true; Player.seekTarget = null;
 		Player.menu = false; Player.track = 0; Player.retries = 0; $('audioMenu').style.display = 'none';
+		Player.nextAt = null; Player.nextOff = false; $('nextUp').style.display = 'none';
+		Player.renderHints();
 		// keep the subtitle language chosen for the previous episode
 		var pref = -1;
 		for (var si = 0; Player.subPref && si < v.subs.length; si++) if (v.subs[si].lang === Player.subPref && !v.subs[si].forced) { pref = si; break; }
@@ -1206,7 +1273,6 @@ var Player = {
 		if (Player.plugin) {
 			Player.fit();
 			var u = Player.url();
-			Screen.log('player_open at=' + Math.floor(at) + ' ' + (u.indexOf('COMPONENT=HLS') > 0 ? 'hls' : 'mp4'));
 			if (at > 5) Player.plugin.ResumePlay(u, Math.floor(at));
 			else Player.plugin.Play(u);
 		} else {
@@ -1226,6 +1292,21 @@ var Player = {
 		Player.open(at);
 	},
 
+	// Previous / next episode from the player: save this one, start the other.
+	switchEp: function (d) {
+		var to = Item.hasNeighbour(d);
+		if (!to) { UI.toastPlayer(d > 0 ? 'Это последняя серия' : 'Это первая серия'); return; }
+		Player.save();
+		Player.active = false;
+		clearInterval(Player.saveTimer);
+		clearTimeout(Player.seekTimer); Player.seekTarget = null;
+		if (Player.plugin) Player.plugin.Stop(); else Player.html5.pause();
+		$('nextUp').style.display = 'none';
+		var s = Item.seasons[to.si], ep = s.eps[to.ei];
+		UI.toastPlayer((s.number ? 'S' + s.number + 'E' : 'Часть ') + ep.number + (ep.title ? ' · ' + ep.title : ''));
+		Item.step(d);
+	},
+
 	stop: function () {
 		if (!Player.active) return;
 		Player.save();
@@ -1237,6 +1318,7 @@ var Player = {
 		if (Player.plugin) Player.plugin.Stop();
 		else { Player.html5.pause(); Player.html5.removeAttribute('src'); Player.html5.style.display = 'none'; }
 		if (pluginAPI) pluginAPI.setOnScreenSaver();
+		Shelf.staleContinue();
 		document.body.className = '';
 		Player.hideOsd();
 		Player.bufferingUi(false);
@@ -1251,10 +1333,10 @@ var Player = {
 	},
 
 	onTime: function (ms) {
-		if (!Player.gotTime) { Player.gotTime = true; Screen.log('player_time ' + ms); }
 		Player.time = ms / 1000;
 		Player.stamp = +new Date();
 		if (Player.time > 30) Player.retries = 0;
+		Player.nextUp();
 		if (Player.plugin && !Player.duration) {
 			var d = Player.plugin.GetDuration();
 			if (d > 0) Player.duration = d / 1000;
@@ -1262,8 +1344,19 @@ var Player = {
 		Player.bufferingUi(false);
 		if ($('osd').style.display === 'block') Player.renderOsd();
 	},
+	// Last 30 seconds of an episode: "Следующая серия через 10", OK = now, Return = stay.
+	nextUp: function () {
+		var v = Player.v, d = Player.duration;
+		if (v.trailer || Player.nextOff || !d || Player.time < d - 30 || !Item.hasNeighbour(1)) return;
+		if (Player.nextAt === null) Player.nextAt = Player.time + 10;
+		var left = Math.ceil(Player.nextAt - Player.time);
+		if (left <= 0) { Player.switchEp(1); return; }
+		var el = $('nextUp');
+		el.innerHTML = 'Следующая серия через ' + left + ' &nbsp;·&nbsp; OK — сейчас &nbsp;·&nbsp; RETURN — остаться';
+		el.style.display = 'block';
+	},
+
 	onInfo: function () {
-		Screen.log('player_info dur=' + (Player.plugin ? Player.plugin.GetDuration() : ''));
 		Player.fit();
 		if (Player.plugin) { var d = Player.plugin.GetDuration(); if (d > 0) Player.duration = d / 1000; }
 	},
@@ -1281,7 +1374,7 @@ var Player = {
 		Player.active = false;
 		clearInterval(Player.saveTimer);
 		if (Player.plugin) Player.plugin.Stop();
-		if (!Item.next()) { Player.active = true; Player.stop(); }
+		if (!Item.step(1)) { Player.active = true; Player.stop(); }
 	},
 	onError: function () {
 		Screen.log('player_error at=' + Math.floor(Player.time));
@@ -1301,10 +1394,18 @@ var Player = {
 		Player.stop();
 	},
 
-	bufferingUi: function (on) { $('buffering').style.display = on ? 'block' : 'none'; },
+	bufferingUi: function (on) {
+		if (Player.buffering === on) return;
+		Player.buffering = on;
+		$('buffering').style.display = on ? 'block' : 'none';
+	},
 
 	showOsd: function () {
-		$('osd').style.display = 'block';
+		if ($('osd').style.display !== 'block') {
+			$('osd').style.display = 'block';
+			$('subs').style.bottom = '160px';
+			Player.renderHints();
+		}
 		Player.renderOsd();
 		clearTimeout(Player.osdTimer);
 		Player.osdTimer = setTimeout(function () { if (!Player.paused && Player.seekTarget === null) Player.hideOsd(); }, 4000);
@@ -1329,10 +1430,14 @@ var Player = {
 			$('osdTime').innerHTML = fmtTime(Player.time) + ' / ' + fmtTime(Player.duration);
 		}
 		$('osdState').innerHTML = Player.paused ? 'ПАУЗА' : '';
-		var n = Player.trackCount();
+	},
+
+	// The hint line only changes per video, not per tick.
+	renderHints: function () {
+		var n = Player.trackCount(), eps = !Player.v.trailer && Item.hasNeighbour(1) !== null;
 		$('osdHints').innerHTML = 'OK — пауза &nbsp;·&nbsp; ◀ ▶ — 10 сек &nbsp;·&nbsp; ◀◀ ▶▶ — 1 мин &nbsp;·&nbsp; CH — 5 мин' +
-			(n > 1 ? ' &nbsp;·&nbsp; ▲ — озвучка' : '') + (Player.v.subs.length ? ' &nbsp;·&nbsp; ▼ — субтитры' : '') + ' &nbsp;·&nbsp; RETURN — выход';
-		$('subs').style.bottom = $('osd').style.display === 'block' ? '160px' : '28px';
+			(n > 1 ? ' &nbsp;·&nbsp; ▲ — озвучка' : '') + (Player.v.subs.length ? ' &nbsp;·&nbsp; ▼ — субтитры' : '') +
+			(eps ? ' &nbsp;·&nbsp; <span class="k red"></span><span class="k green"></span> или держать ◀◀ ▶▶ — серии' : '') + ' &nbsp;·&nbsp; RETURN — выход';
 	},
 
 	trackCount: function () {
@@ -1394,7 +1499,7 @@ var Player = {
 		else if (k === K.ENTER) {
 			var kind = Player.menu, pick = Player.menuIdx;
 			Player.closeMenu();
-			if (kind === 'audio' && pick !== Player.track) { Player.track = pick; Screen.log('set_audio ' + pick); Player.reopen(); }
+			if (kind === 'audio' && pick !== Player.track) { Player.track = pick; Player.reopen(); }
 			if (kind === 'subs') Player.setSub(pick - 1);
 			return;
 		}
@@ -1473,8 +1578,27 @@ var Player = {
 		Player.showOsd();
 	},
 
+	// Holding ◀◀ / ▶▶ (the remote repeats the key) switches episodes; short presses seek.
+	ffrw: function (k) {
+		var now = +new Date(), d = k === K.FF ? 1 : -1, h = Player.hold;
+		if (h && h.k === k && now - h.last < 350) {
+			h.last = now;
+			if (!Player.holdSeen) { Player.holdSeen = true; Screen.log('hold_repeat'); }
+			if (h.fired) return;
+			if (now - h.first >= 800 && Item.hasNeighbour(d)) { h.fired = true; Player.switchEp(d); return; }
+		} else Player.hold = { k: k, first: now, last: now, fired: false };
+		Player.seek(60 * d);
+	},
+
 	key: function (k) {
 		if (Player.menu) { Player.menuKey(k); return; }
+		if ($('nextUp').style.display === 'block') {
+			if (k === K.ENTER) { Player.switchEp(1); return; }
+			if (k === K.RETURN) { Player.nextOff = true; $('nextUp').style.display = 'none'; return; }
+		}
+		if (k === K.RED) { Player.switchEp(-1); return; }
+		if (k === K.GREEN) { Player.switchEp(1); return; }
+		if (k === K.FF || k === K.RW) { Player.ffrw(k); return; }
 		if (k === K.RETURN || k === K.STOP) Player.stop();
 		else if (k === K.UP || k === K.YELLOW) Player.openMenu('audio');
 		else if (k === K.DOWN || k === K.BLUE) Player.openMenu('subs');
@@ -1486,8 +1610,6 @@ var Player = {
 		}
 		else if (k === K.RIGHT) Player.seek(10);
 		else if (k === K.LEFT) Player.seek(-10);
-		else if (k === K.FF) Player.seek(60);
-		else if (k === K.RW) Player.seek(-60);
 		else if (k === K.CH_UP) Player.seek(300);
 		else if (k === K.CH_DOWN) Player.seek(-300);
 		else Player.showOsd();
@@ -1522,7 +1644,6 @@ var MARKUP = [
 	'	</div>',
 	'',
 	'	<div id="item" class="screen">',
-	'		<div id="itemBg"></div>',
 	'		<img id="itemPoster" src="" alt="" />',
 	'		<div id="itemInfo">',
 	'			<div id="itemTitle"></div>',
@@ -1548,6 +1669,7 @@ var MARKUP = [
 	'<div id="subs"></div>',
 	'<div id="audioMenu"></div>',
 	'<div id="playerToast"></div>',
+	'<div id="nextUp"></div>',
 	'<div id="buffering">Буферизация…</div>',
 	'<div id="zoomInfo"></div>'
 ].join('\n');
@@ -1568,7 +1690,6 @@ var App = {
 			if ((e.target || e.srcElement) !== $('anchor')) App.onKey(e); // anchor already handled it
 		};
 		if (CLOUD) {
-			Screen.log('store ' + Store.kind + ' token=' + (Store.get('token') ? 1 : 0));
 			if (Store.get('token')) Home.open(); else App.showAuth();
 			return;
 		}
