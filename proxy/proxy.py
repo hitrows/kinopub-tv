@@ -296,13 +296,19 @@ def app_version(root=ROOT):
         return "0.0"
 
 
-def smarthub_version(version):
-    """Smart Hub shows an app's version only in its own x.yyy form: 0.9 -> 0.009."""
+def app_build(version):
+    """1.9 -> 1090, 1.9.1 -> 1091, 1.10 -> 1100: one number that orders releases."""
     try:
-        major, minor = (int(x) for x in version.split(".")[:2])
-        return "%d.%03d" % (major, minor)
+        parts = [int(x) for x in version.split(".")] + [0, 0]
+        return parts[0] * 1000 + parts[1] * 10 + parts[2]
     except ValueError:
-        return "0.000"
+        return 0
+
+
+def smarthub_version(version):
+    """Smart Hub shows an app's version only in its own x.yyy form: 1.9.1 -> 1.091."""
+    b = app_build(version)
+    return "%d.%03d" % (b // 1000, b % 1000)
 
 
 def widget_zip(v):
@@ -339,7 +345,7 @@ def widget_zip(v):
             if rel in ("index.html", "js/app.js", "css/app.css", "config.xml"):
                 text = data.decode("utf-8")
                 text = text.replace("__PROXY__", v["proxy"]).replace("__VERSION__", version)
-                text = text.replace("__CLOUD__", v["cloud"])
+                text = text.replace("__CLOUD__", v["cloud"]).replace("__BUILD__", str(app_build(version)))
                 text = text.replace("<widgetname>KinoPub</widgetname>", "<widgetname>%s</widgetname>" % v["title"])
                 text = text.replace("js/app.js", "js/app-%s.js" % version)
                 text = text.replace("css/app.css", "css/app-%s.css" % version)

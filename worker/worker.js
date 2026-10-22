@@ -319,8 +319,14 @@ async function raw(env, path) {
 
 async function appFile(env, base, path) {
   const version = (await (await raw(env, "VERSION")).text()).trim();
-  if (path === "manifest.json")
-    return json(200, { version, js: "js/app-" + version + ".js", css: "css/app-" + version + ".css" }, { "Cache-Control": "max-age=60" });
+  if (path === "manifest.json") {
+    // 1.9 -> 1090, 1.9.1 -> 1091. Shells up to 1.9 compare "a.b" as a*1000 + b,
+    // so they get "1.91": newer than any of theirs and in the right order.
+    const n = (version.split(".").map((x) => parseInt(x, 10) || 0).concat([0, 0]));
+    const build = n[0] * 1000 + n[1] * 10 + n[2];
+    return json(200, { version: n[0] + "." + (build % 1000), build, js: "js/app-" + version + ".js", css: "css/app-" + version + ".css" },
+      { "Cache-Control": "max-age=60" });
+  }
   const code = { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "public, max-age=31536000", ...CORS };
   if (/^js\/app-[\d.]+\.js$/.test(path)) {
     const src = (await (await raw(env, "tv/js/app.js")).text())

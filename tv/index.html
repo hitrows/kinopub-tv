@@ -12,8 +12,9 @@
    runs it if it's newer than the copy installed on the TV; without network
    (or in the local build) the installed copy runs. */
 var Boot = {
-	proxy: '__PROXY__', cloud: '__CLOUD__' === '1', version: '__VERSION__', started: false,
+	proxy: '__PROXY__', cloud: '__CLOUD__' === '1', version: '__VERSION__', build: parseInt('__BUILD__', 10) || 0, started: false,
 
+	// two-part number as the first shells compared versions: 1.9 -> 1009
 	num: function (v) { var p = String(v).split('.'); return (parseInt(p[0], 10) || 0) * 1000 + (parseInt(p[1], 10) || 0); },
 
 	script: function (src, cb) {
@@ -44,7 +45,7 @@ var Boot = {
 			clearTimeout(timer);
 			var m = null;
 			try { m = JSON.parse(x.responseText); } catch (e) {}
-			if (x.status !== 200 || !m || Boot.num(m.version) <= Boot.num(Boot.version)) return give();
+			if (x.status !== 200 || !m || (m.build || Boot.num(m.version)) <= (Boot.build || Boot.num(Boot.version))) return give();
 			done = true;
 			Boot.script(Boot.proxy + '/app/' + m.js, function (ok) {
 				if (!ok || !window.App) { done = false; return give(); }

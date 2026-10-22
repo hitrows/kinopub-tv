@@ -1190,7 +1190,7 @@ var Player = {
 	seekTarget: null, seekTimer: null, osdTimer: null, saveTimer: null, lastSaved: 0,
 	menu: false, track: 0, menuIdx: 0, retries: 0,
 	sub: -1, subPref: null, cues: [], cueText: '', stamp: 0, subTimer: null,
-	hold: null, holdSeen: false, nextAt: null, nextOff: false,
+	nextAt: null, nextOff: false,
 
 	init: function () {
 		var p = $('pluginPlayer');
@@ -1437,7 +1437,7 @@ var Player = {
 		var n = Player.trackCount(), eps = !Player.v.trailer && Item.hasNeighbour(1) !== null;
 		$('osdHints').innerHTML = 'OK — пауза &nbsp;·&nbsp; ◀ ▶ — 10 сек &nbsp;·&nbsp; ◀◀ ▶▶ — 1 мин &nbsp;·&nbsp; CH — 5 мин' +
 			(n > 1 ? ' &nbsp;·&nbsp; ▲ — озвучка' : '') + (Player.v.subs.length ? ' &nbsp;·&nbsp; ▼ — субтитры' : '') +
-			(eps ? ' &nbsp;·&nbsp; <span class="k red"></span><span class="k green"></span> или держать ◀◀ ▶▶ — серии' : '') + ' &nbsp;·&nbsp; RETURN — выход';
+			(eps ? ' &nbsp;·&nbsp; <span class="k red"></span><span class="k green"></span> — серии' : '') + ' &nbsp;·&nbsp; RETURN — выход';
 	},
 
 	trackCount: function () {
@@ -1578,18 +1578,6 @@ var Player = {
 		Player.showOsd();
 	},
 
-	// Holding ◀◀ / ▶▶ (the remote repeats the key) switches episodes; short presses seek.
-	ffrw: function (k) {
-		var now = +new Date(), d = k === K.FF ? 1 : -1, h = Player.hold;
-		if (h && h.k === k && now - h.last < 350) {
-			h.last = now;
-			if (!Player.holdSeen) { Player.holdSeen = true; Screen.log('hold_repeat'); }
-			if (h.fired) return;
-			if (now - h.first >= 800 && Item.hasNeighbour(d)) { h.fired = true; Player.switchEp(d); return; }
-		} else Player.hold = { k: k, first: now, last: now, fired: false };
-		Player.seek(60 * d);
-	},
-
 	key: function (k) {
 		if (Player.menu) { Player.menuKey(k); return; }
 		if ($('nextUp').style.display === 'block') {
@@ -1598,7 +1586,8 @@ var Player = {
 		}
 		if (k === K.RED) { Player.switchEp(-1); return; }
 		if (k === K.GREEN) { Player.switchEp(1); return; }
-		if (k === K.FF || k === K.RW) { Player.ffrw(k); return; }
+		if (k === K.FF) { Player.seek(60); return; }
+		if (k === K.RW) { Player.seek(-60); return; }
 		if (k === K.RETURN || k === K.STOP) Player.stop();
 		else if (k === K.UP || k === K.YELLOW) Player.openMenu('audio');
 		else if (k === K.DOWN || k === K.BLUE) Player.openMenu('subs');
