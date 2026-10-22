@@ -834,8 +834,24 @@ var Item = {
 	actions: function () {
 		var ep = Item.seasons[0].eps[0];
 		var w = ep.watching || { status: ep.watched, time: 0 };
-		if (w.status === 0 && w.time > 0) return [{ label: 'Продолжить с ' + fmtTime(w.time), fromStart: false }, { label: 'Начать сначала', fromStart: true }];
-		return [{ label: 'Смотреть', fromStart: true }];
+		var out = (w.status === 0 && w.time > 0)
+			? [{ label: 'Продолжить с ' + fmtTime(w.time), fromStart: false }, { label: 'Начать сначала', fromStart: true }]
+			: [{ label: 'Смотреть', fromStart: true }];
+		if (Item.trailerB64()) out.push({ label: 'Трейлер', trailer: true });
+		return out;
+	},
+
+	// The trailer is an HLS master on the same CDN as the films.
+	trailerB64: function () {
+		var t = Item.data && Item.data.trailer, u = t && t.url;
+		return u && u.indexOf('/s/') > 0 ? u.split('/s/')[1].split('/')[0] : null;
+	},
+
+	playTrailer: function () {
+		var b = Item.trailerB64();
+		if (!b) { UI.toast('У этого тайтла нет трейлера'); return; }
+		Player.play({ hls: b, mp4: null, trailer: true, title: shortTitle(Item.data.title) + '  ·  трейлер', start: 0,
+			id: Item.data.id, video: 0, season: null, duration: 0, audios: [], subs: [], w: 0, h: 0 });
 	},
 
 	pickFile: function (ep) {
@@ -902,7 +918,8 @@ var Item = {
 			var acts = Item.actions();
 			if (k === K.UP && Item.act > 0) Item.act--;
 			else if (k === K.DOWN && Item.act < acts.length - 1) Item.act++;
-			else if (k === K.ENTER || k === K.PLAY) { Item.play(acts[Item.act].fromStart); return; }
+			else if (k === K.ENTER || k === K.PLAY) { if (acts[Item.act].trailer) Item.playTrailer(); else Item.play(acts[Item.act].fromStart); return; }
+			else if (k === K.BLUE) { Item.playTrailer(); return; }
 			else if (k === K.YELLOW) { Item.play(true); return; }
 			else if (k === K.RED) { Item.toggleWatched(); return; }
 			Item.render();
@@ -917,6 +934,7 @@ var Item = {
 		else if (k === K.CH_UP) Item.ei = Math.max(0, Item.ei - Item.VISIBLE);
 		else if (k === K.ENTER || k === K.PLAY) { Item.play(); return; }
 		else if (k === K.YELLOW) { Item.play(true); return; }
+		else if (k === K.BLUE) { Item.playTrailer(); return; }
 		else if (k === K.RED) { Item.toggleWatched(); return; }
 		Item.scroll();
 		Item.render();
@@ -989,6 +1007,7 @@ var Player = {
 	// deep into a multi-GB mp4 makes it stall for a minute.
 	url: function () {
 		var v = Player.v;
+		if (v.trailer) return PROXY + '/hls/' + v.hls + '/1/index.m3u8' + (Player.plugin ? '|COMPONENT=HLS' : '');
 		if (Player.plugin && v.hls) {
 			var a = v.audios[Player.track];
 			return PROXY + '/hls/' + v.hls + '/' + (a && a.index ? a.index : 1) + '/index.m3u8|COMPONENT=HLS';
@@ -1050,7 +1069,7 @@ var Player = {
 
 	save: function () {
 		var v = Player.v;
-		if (!v || Player.time < 5 || Math.abs(Player.time - Player.lastSaved) < 3) return;
+		if (!v || v.trailer || Player.time < 5 || Math.abs(Player.time - Player.lastSaved) < 3) return;
 		Player.lastSaved = Player.time;
 		Net.api('watching/marktime?id=' + v.id + '&video=' + v.video + (v.season ? '&season=' + v.season : '') + '&time=' + Math.floor(Player.time), function () {}, function () {});
 	},
@@ -1076,6 +1095,7 @@ var Player = {
 	onBufEnd: function () { Player.bufferingUi(false); },
 	onEnd: function () {
 		if (!Player.active) return;
+		if (Player.v.trailer) { Player.stop(); return; }
 		if (Player.duration && Player.time < Player.duration - 90) {
 			Screen.log('player_early_end at=' + Math.floor(Player.time));
 			return Player.recover();
@@ -1335,7 +1355,7 @@ var MARKUP = [
 	'			<div id="seasons"></div>',
 	'			<div id="episodes"></div>',
 	'		</div>',
-	'		<div id="itemHints"><span class="k green"></span> качество: <span id="qualityLabel"></span>&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> с начала&nbsp;&nbsp;&nbsp;<span class="k red"></span> отметить просмотренным&nbsp;&nbsp;&nbsp;TOOLS — размер экрана</div>',
+	'		<div id="itemHints"><span class="k green"></span> качество: <span id="qualityLabel"></span>&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> с начала&nbsp;&nbsp;&nbsp;<span class="k red"></span> отметить просмотренным&nbsp;&nbsp;&nbsp;<span class="k blue"></span> трейлер&nbsp;&nbsp;&nbsp;TOOLS — размер экрана</div>',
 	'	</div>',
 	'',
 	'	<div id="loading">Загрузка…</div>',
