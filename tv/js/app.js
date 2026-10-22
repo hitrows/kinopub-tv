@@ -271,10 +271,20 @@ var SHELVES = [
 	{ title: 'Новые документальные', path: 'items/fresh?type=documovie' }
 ];
 
+// "Для тебя": one shelf per category, each recommended from what was watched in it
+var REC_SHELVES = [
+	{ title: 'Новинки для тебя', recs: 'new' },
+	{ title: 'Фильмы', recs: 'movie' },
+	{ title: 'Сериалы', recs: 'serial' },
+	{ title: 'Аниме', recs: 'anime' },
+	{ title: 'Концерты', recs: 'concert' },
+	{ title: 'Документальное', recs: 'doc' }
+];
+
 // icon = position in img/menu-*.png
 var SECTIONS = [
 	{ title: 'Главная', shelves: true, icon: 0 },
-	{ title: 'Для тебя', recs: true, icon: 13 },
+	{ title: 'Для тебя', recs: true, shelves: REC_SHELVES, icon: 13 },
 	{ title: 'Новинки', list: '', icon: 1 },
 	{ title: 'Фильмы', list: 'type=movie', icon: 2 },
 	{ title: 'Сериалы', list: 'type=serial', icon: 3 },
@@ -283,7 +293,6 @@ var SECTIONS = [
 	{ title: 'Докуфильмы', list: 'type=documovie', icon: 6 },
 	{ title: 'Докусериалы', list: 'type=docuserial', icon: 7 },
 	{ title: 'ТВ-шоу', list: 'type=tvshow', icon: 8 },
-	{ title: 'Недосмотренное', watching: true, badge: 'new', icon: 9 },
 	{ title: 'История', history: true, icon: 10 },
 	{ title: 'Закладки', bookmarks: true, icon: 11 },
 	{ title: 'Поиск', search: true, icon: 12 }
@@ -684,8 +693,10 @@ var Shelf = {
 		Shelf.rows = []; Shelf.si = 0; Shelf.top = 0;
 		var id = Home.reqId;
 		UI.loading(true);
-		for (var i = 0; i < SHELVES.length; i++) {
-			var row = { title: SHELVES[i].title, items: [], idx: 0, off: 0 };
+		var list = SECTIONS[Home.sec].shelves;
+		if (!(list instanceof Array)) list = SHELVES;
+		for (var i = 0; i < list.length; i++) {
+			var row = { title: list[i].title, items: [], idx: 0, off: 0 };
 			Shelf.rows.push(row);
 			(function (row, sh) {
 				var got = function (r) {
@@ -695,9 +706,9 @@ var Shelf = {
 					Home.remember();
 					Shelf.render();
 				};
-				if (sh.recs) Net.get('/recs', got, function () {});
+				if (sh.recs) Net.get('/recs' + (sh.recs === true ? '' : '?cat=' + sh.recs), got, function () {});
 				else Net.api(sh.path + '&perpage=24', got, function () {});
-			})(row, SHELVES[i]);
+			})(row, list[i]);
 		}
 	},
 
@@ -758,6 +769,7 @@ var Item = {
 			Item.act = 0;
 			Item.area = 'episodes';
 			Item.onTrailer = false;
+			Item.tabOff = 0;
 			UI.screen('item');
 			App.handler = Item;
 			Item.render();
@@ -798,12 +810,19 @@ var Item = {
 
 		var multi = Item.seasons.length > 1 || Item.seasons[0].number > 0;
 		var h = '';
-		var tabsFocus = Item.area === 'seasons';
-		if (multi) for (var s = 0; s < Item.seasons.length; s++)
-			h += '<span class="st' + (s === Item.si ? ' active' : '') + (tabsFocus && !Item.onTrailer && s === Item.si ? ' focus' : '') + '">' + esc(Item.seasons[s].title) + '</span>';
-		// series: the trailer is the last tab next to the seasons
-		if (multi && Item.trailerB64())
-			h += '<span class="st trailer' + (tabsFocus && Item.onTrailer ? ' focus' : '') + '">&#9654; Трейлер</span>';
+		if (multi) {
+			// series tabs: "▶ Трейлер", Сезон 1, Сезон 2, ... — a window that follows the focus
+			var tabs = Item.tabs(), fi = Item.tabIndex(), tabsFocus = Item.area === 'seasons';
+			if (fi < Item.tabOff) Item.tabOff = fi;
+			if (fi >= Item.tabOff + Item.TABS) Item.tabOff = fi - Item.TABS + 1;
+			if (Item.tabOff > 0) h += '<span class="st-more">&#8249;</span>';
+			for (var t = Item.tabOff; t < tabs.length && t < Item.tabOff + Item.TABS; t++) {
+				var tab = tabs[t], on = t === fi;
+				h += '<span class="st' + (tab.trailer ? ' trailer' : '') + (on && !tab.trailer ? ' active' : '') + (tabsFocus && on ? ' focus' : '') + '">' +
+					(tab.trailer ? '&#9654; Трейлер' : esc(Item.seasons[tab.season].title)) + '</span>';
+			}
+			if (Item.tabOff + Item.TABS < tabs.length) h += '<span class="st-more">&#8250;</span>';
+		}
 		$('seasons').innerHTML = h;
 		$('seasons').style.display = multi ? 'block' : 'none';
 
@@ -833,6 +852,26 @@ var Item = {
 	},
 
 	current: function () { return Item.seasons[Item.si].eps[Item.ei]; },
+
+	TABS: 6, tabOff: 0,
+	tabs: function () {
+		var out = [];
+		if (Item.trailerB64()) out.push({ trailer: true });
+		for (var i = 0; i < Item.seasons.length; i++) out.push({ season: i });
+		return out;
+	},
+	// the tab under focus: the trailer, or the selected season
+	tabIndex: function () {
+		var withTrailer = Item.trailerB64() ? 1 : 0;
+		return Item.onTrailer && withTrailer ? 0 : withTrailer + Item.si;
+	},
+	moveTab: function (d) {
+		var tabs = Item.tabs(), i = Item.tabIndex() + d;
+		if (i < 0 || i >= tabs.length) return;
+		if (tabs[i].trailer) { Item.onTrailer = true; return; }
+		Item.onTrailer = false;
+		if (tabs[i].season !== Item.si) { Item.si = tabs[i].season; Item.ei = 0; Item.top = 0; }
+	},
 
 	// A plain movie (one video, no seasons) gets "continue" / "from start" rows instead of a list.
 	single: function () { return Item.seasons.length === 1 && !Item.seasons[0].number && Item.seasons[0].eps.length === 1; },
@@ -914,14 +953,8 @@ var Item = {
 		if (k === K.GREEN) { Item.quality = (Item.quality + 1) % QUALITIES.length; Item.render(); return; }
 		if (Item.area === 'seasons') {
 			if (Item.onTrailer && (k === K.ENTER || k === K.PLAY)) { Item.playTrailer(); return; }
-			if (k === K.LEFT) {
-				if (Item.onTrailer) Item.onTrailer = false;
-				else if (Item.si > 0) { Item.si--; Item.ei = 0; Item.top = 0; }
-			}
-			else if (k === K.RIGHT) {
-				if (Item.si < Item.seasons.length - 1 && !Item.onTrailer) { Item.si++; Item.ei = 0; Item.top = 0; }
-				else if (Item.trailerB64()) Item.onTrailer = true;
-			}
+			if (k === K.LEFT) Item.moveTab(-1);
+			else if (k === K.RIGHT) Item.moveTab(1);
 			else if (k === K.DOWN || k === K.ENTER) { Item.onTrailer = false; Item.area = 'episodes'; }
 			Item.render();
 			return;

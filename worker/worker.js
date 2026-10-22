@@ -354,14 +354,41 @@ async function sha(text) {
 
 const norm = (t) => String(t || "").toLowerCase().replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/g, "");
 
+// Categories for the "Для тебя" shelves. Each shelf is its own request (its
+// own 50-subrequest budget) and is seeded by what was watched in that
+// category, so a run of anime doesn't push movies and series out.
+const CATS = {
+  all: { kp: () => true, tmdb: (r) => !tmdbKids(r), balanced: true, fill: "items/hot?type=movie" },
+  new: { kp: (it) => (it.year || 0) >= thisYear() - 1, tmdb: (r) => yearOf(r) >= thisYear() - 1 && !tmdbKids(r), balanced: true, fill: "items/fresh?type=movie" },
+  movie: { kp: (it) => !TV_TYPES.includes(it.type) && it.type !== "concert" && !isAnime(it) && !isDoc(it),
+    tmdb: (r, media) => media === "movie" && !tmdbAnime(r) && !tmdbKids(r) && !has(r, 99) && !has(r, 10402), fill: "items/popular?type=movie" },
+  serial: { kp: (it) => TV_TYPES.includes(it.type) && !isAnime(it) && !isDoc(it),
+    tmdb: (r, media) => media === "tv" && !tmdbAnime(r) && !tmdbKids(r) && !has(r, 99), fill: "items/popular?type=serial" },
+  anime: { kp: isAnime, tmdb: tmdbAnime, fill: "items?genre=25&sort=-views" },
+  concert: { kp: (it) => it.type === "concert", tmdb: (r) => has(r, 10402), fill: "items/popular?type=concert" },
+  doc: { kp: isDoc, tmdb: (r) => has(r, 99), fill: "items/popular?type=documovie" },
+};
+// Workers' clock reads 1970 at startup; the year is read per request.
+const thisYear = () => new Date().getUTCFullYear();
+const ROW = 18;
+function has(r, g) { return (r.genre_ids || []).includes(g); }
+function yearOf(r) { return parseInt((r.release_date || r.first_air_date || "").slice(0, 4), 10) || 0; }
+function tmdbAnime(r) { return has(r, 16) && r.original_language === "ja"; }
+// TMDB has a Kids genre for TV; for films, a family cartoon is the giveaway
+function tmdbKids(r) { return has(r, 10762) || (has(r, 16) && has(r, 10751)); }
+function isAnime(it) { return (it.genres || []).some((g) => g.id === 25); }
+function isDoc(it) { return it.type === "documovie" || it.type === "docuserial" || (it.genres || []).some((g) => g.id === 24); }
+
 async function recs(request, env, base, ctx) {
   const tok = request.headers.get("X-KP-Token");
   if (!tok) return json(401, { error: "not_authorized" });
   if (!env.TMDB_TOKEN) return json(200, { items: [], error: "no_tmdb_token" });
+  const catName = new URL(request.url).searchParams.get("cat") || "all";
+  const cat = CATS[catName] || CATS.all;
 
-  const cacheKey = new Request("https://kp-orsay.cache/recs/v3/" + (await sha(tok)));
-  const hit = await caches.default.match(cacheKey);
-  if (hit) return hit;
+  const cacheKey = new Request("https://kp-orsay.cache/recs/v5/" + catName + "/" + (await sha(tok)));
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
 
   const hist = await kp(tok, "history?perpage=50");
   const seen = new Set(), strong = [], weak = [];
@@ -371,16 +398,29 @@ async function recs(request, env, base, ctx) {
     seen.add(it.id);
     if (!it.imdb) continue;
     const s = { item: it, weight: seedWeight(h) };
-    if ((h.time || 0) >= MIN_POSITION || (h.counter || 0) >= 2) { if (strong.length < 20) strong.push(s); }
+    if ((h.time || 0) >= MIN_POSITION || (h.counter || 0) >= 2) strong.push(s);
     else weak.push(s);
   }
-  // the most watched of the 20 most recent; little real watching yet: take what was opened
-  const seeds = strong.sort((a, b) => b.weight - a.weight).slice(0, SEEDS);
+  // seeds from this category first; too few of them: the most watched overall
+  // (TMDB results are filtered by category anyway)
+  const byWeight = (a, b) => b.weight - a.weight;
+  let seeds;
+  if (cat.balanced) {
+    // equally from films, series and anime, so one binge doesn't take over
+    const groups = [CATS.movie.kp, CATS.serial.kp, isAnime].map((f) => strong.filter((s) => f(s.item)).sort(byWeight));
+    seeds = [];
+    for (let i = 0; seeds.length < 6 && i < 6; i++) for (const g of groups) if (g[i] && seeds.length < 6) seeds.push(g[i]);
+  } else {
+    const own = strong.filter((s) => cat.kp(s.item)).sort(byWeight);
+    const rest = strong.filter((s) => !own.includes(s)).slice(0, 20).sort(byWeight);
+    seeds = own.slice(0, SEEDS);
+    for (const s of rest) if (seeds.length < (own.length >= 2 ? SEEDS : 6)) seeds.push(s);
+  }
   while (seeds.length < 3 && weak.length) seeds.push(weak.shift());
 
-  // TMDB: imdb id -> tmdb id -> recommendations
+  // TMDB: imdb id -> tmdb id -> recommendations in this category
   const scores = new Map();
-  await Promise.all(seeds.map(async ({ item: seed, weight }) => {
+  await Promise.all(seeds.slice(0, 6).map(async ({ item: seed, weight }) => {
     const imdb = "tt" + String(seed.imdb).padStart(7, "0");
     const found = await tmdb(env, "/find/" + imdb + "?external_source=imdb_id");
     if (!found) return;
@@ -390,39 +430,48 @@ async function recs(request, env, base, ctx) {
     const media = found.tv_results.includes(hit) ? "tv" : "movie";
     const rec = await tmdb(env, "/" + media + "/" + hit.id + "/recommendations?language=ru-RU&page=1");
     ((rec && rec.results) || []).forEach((r, rank) => {
-      const key = media + r.id;
-      const c = scores.get(key) || {
-        media, title: r.title || r.name, original: r.original_title || r.original_name,
-        year: parseInt((r.release_date || r.first_air_date || "").slice(0, 4), 10) || 0, score: 0,
-      };
+      const rmedia = r.media_type || media;
+      if (!cat.tmdb(r, rmedia)) return;
+      const key = rmedia + r.id;
+      const c = scores.get(key) || { media: rmedia, title: r.title || r.name, original: r.original_title || r.original_name, year: yearOf(r), score: 0 };
       c.score += weight * (1 + (20 - rank) / 20) + Math.min(r.vote_average || 0, 10) / 50;
       scores.set(key, c);
     });
   }));
 
-  // back to Kinopub
+  // back to Kinopub, keeping only what fits the category
   const top = [...scores.values()].sort((a, b) => b.score - a.score).slice(0, CANDIDATES);
   const found = await Promise.all(top.map(async (c) => {
     const res = await kp(tok, "items/search?perpage=5&q=" + encodeURIComponent(c.title));
     const want = [norm(c.title), norm(c.original)];
     for (const it of (res && res.items) || []) {
-      const isTv = TV_TYPES.includes(it.type);
-      if (isTv !== (c.media === "tv")) continue;
+      if (TV_TYPES.includes(it.type) !== (c.media === "tv")) continue;
       if (c.year && it.year && Math.abs(it.year - c.year) > 1) continue;
-      const names = String(it.title).split(" / ").map(norm);
-      if (names.some((n) => want.includes(n))) return it;
+      if (String(it.title).split(" / ").map(norm).some((n) => want.includes(n))) return it;
     }
     return null;
   }));
 
   const out = [], used = new Set();
-  for (const it of found) {
-    if (!it || seen.has(it.id) || used.has(it.id)) continue;
+  const take = (it) => {
+    if (!it || seen.has(it.id) || used.has(it.id) || !cat.kp(it) || out.length >= ROW) return;
     used.add(it.id);
     out.push(slimItem(it));
+  };
+  if (cat.balanced) {
+    // take turns: film, series, anime, film, ...
+    const kinds = [CATS.movie.kp, CATS.serial.kp, isAnime, () => true];
+    const queues = kinds.map(() => []);
+    for (const it of found) if (it) queues[kinds.findIndex((f) => f(it))].push(it);
+    for (let i = 0; queues.some((q) => q[i]); i++) for (const q of queues) take(q[i]);
+  } else found.forEach(take);
+  // a short row is topped up with what's popular in the category and not watched yet
+  if (out.length < ROW) {
+    const more = await kp(tok, cat.fill + (cat.fill.includes("?") ? "&" : "?") + "perpage=40");
+    ((more && more.items) || []).forEach(take);
   }
+
   const resp = json(200, rewrite({ items: out }, base), { "Cache-Control": "private, max-age=" + RECS_TTL });
-  // the shared cache keeps it for 6 hours; a TV-side 304 isn't needed
   const stored = new Response(resp.clone().body, resp);
   stored.headers.set("Cache-Control", "public, max-age=" + RECS_TTL);
   ctx.waitUntil(caches.default.put(cacheKey, stored));

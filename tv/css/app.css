@@ -109,3 +109,4 @@ body.playing #app { display: none; }
 .hint .tmdb { width: 106px; height: 14px; vertical-align: -2px; }
 .st.trailer { color: #c9cbd1; }
 .st.trailer.focus { color: #111; }
+.st-more { display: inline-block; height: 28px; line-height: 28px; padding: 0 6px; margin-right: 6px; color: #f5a623; font-size: 20px; }
