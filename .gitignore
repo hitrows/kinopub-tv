@@ -1,0 +1,7 @@
+.DS_Store
+data/
+deploy.env
+LOCAL.md
+build/
+*.zip
+.claude/

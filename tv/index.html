@@ -1,0 +1,75 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>KinoPub</title>
+<link rel="stylesheet" type="text/css" href="css/app.css" />
+<script type="text/javascript" src="$MANAGER_WIDGET/Common/API/Widget.js"></script>
+<script type="text/javascript" src="$MANAGER_WIDGET/Common/API/TVKeyValue.js"></script>
+<script type="text/javascript" src="$MANAGER_WIDGET/Common/API/Plugin.js"></script>
+<script type="text/javascript" src="js/app.js"></script>
+</head>
+<body onload="App.init();">
+<object id="pluginObjectNNavi" border="0" classid="clsid:SAMSUNG-INFOLINK-NNAVI" style="position:absolute;width:0;height:0;"></object>
+<object id="pluginObjectTVMW" border="0" classid="clsid:SAMSUNG-INFOLINK-TVMW" style="position:absolute;width:0;height:0;"></object>
+<object id="pluginObjectAudio" border="0" classid="clsid:SAMSUNG-INFOLINK-AUDIO" style="position:absolute;width:0;height:0;"></object>
+<object id="pluginPlayer" border="0" classid="clsid:SAMSUNG-INFOLINK-PLAYER" style="position:absolute;left:0;top:0;width:960px;height:540px;"></object>
+
+<a href="javascript:void(0);" id="anchor" onkeydown="App.onKey(event);"></a>
+
+<div id="root">
+<div id="app">
+	<div id="auth" class="screen">
+		<div class="logo">KinoPub</div>
+		<div class="auth-text">Открой на телефоне или компьютере</div>
+		<div class="auth-url" id="authUrl">kino.watch/device</div>
+		<div class="auth-text">и введи код</div>
+		<div class="auth-code" id="authCode">…</div>
+		<div class="auth-hint" id="authHint"></div>
+	</div>
+
+	<div id="home" class="screen">
+		<div id="menu"></div>
+		<div id="content">
+			<div id="sectionTitle"></div>
+			<div id="searchBox">
+				<div id="searchQuery"></div>
+				<div id="keyboard"></div>
+			</div>
+			<div id="grid"></div>
+			<div id="gridEmpty"></div>
+		</div>
+	</div>
+
+	<div id="item" class="screen">
+		<div id="itemBg"></div>
+		<img id="itemPoster" src="" alt="" />
+		<div id="itemInfo">
+			<div id="itemTitle"></div>
+			<div id="itemMeta"></div>
+			<div id="itemPlot"></div>
+			<div id="seasons"></div>
+			<div id="episodes"></div>
+		</div>
+		<div id="itemHints"><span class="k green"></span> качество: <span id="qualityLabel"></span>&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> с начала&nbsp;&nbsp;&nbsp;<span class="k red"></span> отметить просмотренным&nbsp;&nbsp;&nbsp;<span class="k blue"></span> размер экрана</div>
+	</div>
+
+	<div id="loading">Загрузка…</div>
+	<div id="toast"></div>
+</div>
+
+<div id="osd">
+	<div id="osdTitle"></div>
+	<div id="osdBar"><div id="osdProgress"></div><div id="osdSeek"></div></div>
+	<div id="osdTime"></div>
+	<div id="osdState"></div>
+	<div id="osdHints"></div>
+</div>
+<div id="subs"></div>
+<div id="audioMenu"></div>
+<div id="playerToast"></div>
+<div id="buffering">Буферизация…</div>
+<div id="zoomInfo"></div>
+</div>
+</body>
+</html>

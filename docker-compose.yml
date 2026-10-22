@@ -1,0 +1,19 @@
+# Kinopub proxy + TV app server. Run on a Linux box in the same network as the TV:
+#   docker compose up -d
+# The TV downloads its app list from port 80, so by default the proxy takes port 80.
+# If something else already listens on 80 (nginx, etc.), see SETUP.md.
+services:
+  kinopub:
+    image: python:3.13-alpine
+    container_name: kinopub
+    restart: unless-stopped
+    network_mode: host
+    command: ["python", "-u", "/app/proxy/proxy.py"]
+    environment:
+      - KP_PORT=${KP_PORT:-80}
+      - KP_BIND=${KP_BIND:-0.0.0.0}
+      - KP_PUBLIC=${KP_PUBLIC:-}
+      - KP_DATA=/data
+    volumes:
+      - ./:/app:ro
+      - ./data:/data
