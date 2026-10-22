@@ -16,6 +16,9 @@ Standard library only. Configuration (environment):
               to a Cloudflare Worker (worker/) at this URL instead of this proxy
   KP_LOCAL    set to 0 to offer only the cloud build: then this proxy is needed
               only while the TV installs the app
+  KP_LOCAL_ROOT  optional: build "KP Local" from another checkout (a folder with
+              tv/ and VERSION), e.g. to keep it on an older release while the
+              cloud build moves on
 
 App delivery (what the TV's "Start User App Sync" downloads):
   GET /widgetlist.xml         -> list of apps: "KP Local" (this proxy) and/or
@@ -123,6 +126,16 @@ def oauth(path, **params):
     return http_json("POST", API + path + "?" + urllib.parse.urlencode(params))
 
 
+def forget_token():
+    """Kinopub revoked the session: drop it so the TV can log in again."""
+    state["token"] = None
+    try:
+        os.remove(TOKEN_FILE)
+    except OSError:
+        pass
+    print("token revoked, waiting for a new login", flush=True)
+
+
 def refresh():
     tok = state["token"]
     if not tok or not tok.get("refresh_token"):
@@ -132,6 +145,8 @@ def refresh():
     if status == 200 and res.get("access_token"):
         save_token(res)
         return True
+    if status in (400, 401) and res.get("error") in ("invalid_refresh_token", "invalid_grant"):
+        forget_token()
     return False
 
 
@@ -251,6 +266,7 @@ def remote(b64):
 _widget = {}
 
 CLOUD_URL = os.environ.get("KP_CLOUD_URL", "").rstrip("/")
+LOCAL_ROOT = os.environ.get("KP_LOCAL_ROOT", "")
 LOCAL = os.environ.get("KP_LOCAL", "1") != "0" or not CLOUD_URL
 
 
@@ -265,13 +281,16 @@ def variants():
     if CLOUD_URL:
         out.append({"id": "KPOrsay", "title": "Kinopub", "proxy": CLOUD_URL, "cloud": "1"})
     if LOCAL:
-        out.append({"id": "KinoPub", "title": "KP Local", "proxy": PUBLIC, "cloud": "0"})
+        local = {"id": "KinoPub", "title": "KP Local", "proxy": PUBLIC, "cloud": "0"}
+        if LOCAL_ROOT:
+            local["root"] = LOCAL_ROOT
+        out.append(local)
     return out
 
 
-def app_version():
+def app_version(root=ROOT):
     try:
-        with open(os.path.join(ROOT, "VERSION")) as f:
+        with open(os.path.join(root, "VERSION")) as f:
             return f.read().strip() or "0.0"
     except OSError:
         return "0.0"
@@ -292,9 +311,11 @@ def widget_zip(v):
     The TV caches app files by name across reinstalls, so app.js / app.css
     are renamed per version (app-<version>.js).
     """
-    version = app_version()
+    root = v.get("root")
+    tv_dir = os.path.join(root, "tv") if root else TV_DIR
+    version = app_version(root) if root else app_version()
     files = []
-    for base, _, names in os.walk(TV_DIR):
+    for base, _, names in os.walk(tv_dir):
         for n in sorted(names):
             if not n.startswith("."):
                 files.append(os.path.join(base, n))
@@ -305,13 +326,13 @@ def widget_zip(v):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for path in files:
-            rel = os.path.relpath(path, TV_DIR).replace(os.sep, "/")
+            rel = os.path.relpath(path, tv_dir).replace(os.sep, "/")
             local = v["cloud"] != "1"
             if rel.startswith("img/local/"):
                 if not local:
                     continue
                 rel = "img/" + rel[len("img/local/"):]  # the local build's orange icons
-            elif local and os.path.exists(os.path.join(TV_DIR, "img", "local", os.path.basename(rel))):
+            elif local and os.path.exists(os.path.join(tv_dir, "img", "local", os.path.basename(rel))):
                 continue
             with open(path, "rb") as f:
                 data = f.read()

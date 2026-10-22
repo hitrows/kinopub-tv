@@ -12,6 +12,11 @@
 //   GET /s/<b64>/<name>             -> posters etc.; .m3u8 playlists are rewritten
 //   GET /hls/<b64 master>/<n>/index.m3u8  -> HLS with audio track n
 //   GET /srt/<b64>/subs.json        -> .srt as [[start, end, text], ...]
+//   GET /app/manifest.json          -> {version, js, css} of the newest TV app
+//   GET /app/js/..., /app/css/..., /app/img/...
+//                                   -> the TV app's files from GitHub (repo APP_REPO,
+//                                      git ref APP_REF, default tag "cloud"), so the
+//                                      installed app updates itself on launch
 
 const API = "https://api.service-kp.com";
 const UA = "KinoPubOrsay/1.0";
@@ -44,6 +49,7 @@ export default {
       if (p.startsWith("/hls/")) return await hls(base, p);
       if (p.startsWith("/srt/")) return await srt(p);
       if (p.startsWith("/s/")) return await relay(request, base, p, ctx);
+      if (p.startsWith("/app/")) return await appFile(env, base, p.slice(5));
       if (p === "/" || p === "/health") return json(200, { ok: true, service: "kp-orsay" });
       return json(404, { error: "not_found" });
     } catch (e) {
@@ -107,7 +113,32 @@ async function apiCall(request, env, base, path, search) {
   const r = await fetch(API + "/v1/" + path + search, { headers: { Authorization: "Bearer " + tok, "User-Agent": UA } });
   let body;
   try { body = await r.json(); } catch (e) { return json(502, { error: "bad_api_response_" + r.status }); }
+  if (isList(path)) body = slimList(body);
   return json(r.status, rewrite(body, base));
+}
+
+/* ---------- lists: only what a poster grid shows ---------- */
+
+// A page of 30 items is ~67 KB with cast, plots and genres the grid never
+// shows; parsing that is real work for a 2013 TV. Item pages stay complete.
+function isList(path) {
+  return !/^items\/\d+/.test(path) || /^items\/(search|fresh|hot|popular)/.test(path);
+}
+
+function slimItem(it) {
+  if (!it || typeof it !== "object") return it;
+  const out = {};
+  for (const k of ["id", "type", "title", "new", "total", "watched", "count"]) if (it[k] !== undefined) out[k] = it[k];
+  if (it.posters) out.posters = { small: it.posters.small };
+  return out;
+}
+
+function slimList(body) {
+  if (!body || typeof body !== "object") return body;
+  const out = { ...body };
+  if (Array.isArray(body.items)) out.items = body.items.map(slimItem);
+  if (Array.isArray(body.history)) out.history = body.history.map((h) => ({ item: slimItem(h.item) }));
+  return out;
 }
 
 /* ---------- URL helpers ---------- */
@@ -252,4 +283,34 @@ async function srt(p) {
   }
   cues.sort((x, y) => x[0] - y[0]);
   return json(200, cues, { "Cache-Control": "public, max-age=86400" });
+}
+
+/* ---------- self-updating TV app ---------- */
+
+async function raw(env, path) {
+  const repo = env.APP_REPO || "hitrows/kinopub-tv";
+  const ref = env.APP_REF || "cloud";
+  const r = await fetch("https://raw.githubusercontent.com/" + repo + "/" + ref + "/" + path,
+    { cf: { cacheTtl: 60, cacheEverything: true } });
+  if (!r.ok) { const e = new Error("app file not found: " + path); e.status = 404; throw e; }
+  return r;
+}
+
+async function appFile(env, base, path) {
+  const version = (await (await raw(env, "VERSION")).text()).trim();
+  if (path === "manifest.json")
+    return json(200, { version, js: "js/app-" + version + ".js", css: "css/app-" + version + ".css" }, { "Cache-Control": "max-age=60" });
+  const code = { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "public, max-age=31536000", ...CORS };
+  if (/^js\/app-[\d.]+\.js$/.test(path)) {
+    const src = (await (await raw(env, "tv/js/app.js")).text())
+      .replace("__PROXY__", base).replace("__VERSION__", version).replace("__CLOUD__", "1");
+    return new Response(src, { headers: code });
+  }
+  if (/^css\/app-[\d.]+\.css$/.test(path))
+    return new Response(await (await raw(env, "tv/css/app.css")).text(), { headers: { ...code, "Content-Type": "text/css; charset=utf-8" } });
+  if (/^img\/[\w.-]+\.png$/.test(path)) {
+    const r = await raw(env, "tv/" + path);
+    return new Response(r.body, { headers: { ...code, "Content-Type": "image/png" } });
+  }
+  return json(404, { error: "not_found" });
 }

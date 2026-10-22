@@ -38,6 +38,17 @@ function fmtTime(sec) {
 }
 function shortTitle(t) { return String(t || '').split(' / ')[0]; }
 
+// Moving focus only re-classes two elements: rebuilding a whole grid on every
+// key press is the slowest thing this TV's CPU can be asked to do.
+function setClass(id, cls, on) {
+	var el = $(id);
+	if (!el) return;
+	var has = (' ' + el.className + ' ').indexOf(' ' + cls + ' ') >= 0;
+	if (on && !has) el.className += ' ' + cls;
+	else if (!on && has) el.className = (' ' + el.className + ' ').replace(' ' + cls + ' ', ' ').replace(/^\s+|\s+$/g, '');
+}
+function moveFocus(from, to) { setClass(from, 'focus', false); setClass(to, 'focus', true); }
+
 /* ---------- storage (cloud build keeps the token on the TV) ---------- */
 
 // localStorage when the TV really persists it, else the Orsay FileSystem API.
@@ -296,6 +307,7 @@ var Home = {
 	idx: 0, top: 0,   // focused card, first visible row
 	query: '', lang: 'ru', kbRow: 1, kbCol: 0, kbRows: [], searchTimer: null, reqId: 0,
 	sorts: {}, folder: null, seen: {}, inited: false,
+	cache: {}, loadTimer: null,
 
 	open: function () {
 		UI.screen('home');
@@ -319,12 +331,58 @@ var Home = {
 		var h = '<div class="logo"><img src="img/logo-24.png" alt="" />kinopub <span class="ver">v' + VERSION + (CLOUD ? '' : 'L') + '</span></div>';
 		for (var i = 0; i < SECTIONS.length; i++) {
 			var c = 'mi' + (i === Home.sec ? ' active' : '') + (Home.area === 'menu' && i === Home.sec ? ' focus' : '');
-			h += '<div class="' + c + '"><span class="ico" style="background-position:-' + (i * 16) + 'px 0"></span>' + esc(SECTIONS[i].title) + '</div>';
+			h += '<div id="mi' + i + '" class="' + c + '"><span class="ico" style="background-position:-' + (i * 16) + 'px 0"></span>' + esc(SECTIONS[i].title) + '</div>';
 		}
 		$('menu').innerHTML = h;
 	},
 
+	// Walking through the menu only moves the highlight; a section loads once
+	// the user stays on it, or right away if it was opened recently.
+	browse: function (sec) {
+		var old = Home.sec;
+		setClass('mi' + old, 'focus', false); setClass('mi' + old, 'active', false);
+		setClass('mi' + sec, 'focus', true); setClass('mi' + sec, 'active', true);
+		Home.sec = sec;
+		Home.reqId++;
+		clearTimeout(Home.loadTimer); Home.loadTimer = null;
+		if (Home.fromCache(sec)) return;
+		Home.folder = null;
+		Home.renderTitle();
+		$('home').className = 'screen' + (SECTIONS[sec].search ? ' search' : '');
+		$('searchBox').style.display = 'none';
+		$('grid').innerHTML = ''; $('gridEmpty').innerHTML = '';
+		Home.loadTimer = setTimeout(function () { Home.loadTimer = null; Home.load(sec); }, 350);
+	},
+
+	cacheKey: function (sec) { return sec + '|' + (Home.sorts[sec] || 0); },
+
+	// Lists stay fresh for 5 minutes; what you're watching / history for 1.
+	fromCache: function (sec) {
+		var s = SECTIONS[sec], c = Home.cache[Home.cacheKey(sec)];
+		if (!c || s.search || (Home.folder && sec === Home.sec)) return false;
+		var ttl = (s.watching || s.history) ? 60000 : 300000;
+		if (+new Date() - c.ts > ttl) return false;
+		Home.sec = sec; Home.folder = null; Home.seen = {};
+		Home.reqId++; Home.loadingMore = false; UI.loading(false);
+		Home.renderTitle();
+		$('home').className = 'screen';
+		$('searchBox').style.display = 'none';
+		Home.idx = 0; Home.top = 0;
+		if (s.shelves) { Shelf.rows = c.rows; Shelf.si = 0; Shelf.top = 0; for (var i = 0; i < c.rows.length; i++) { c.rows[i].idx = 0; c.rows[i].off = 0; } }
+		else { Home.items = c.items.slice(0); Home.page = c.page; Home.pages = c.pages; }
+		Home.renderGrid();
+		return true;
+	},
+
+	remember: function () {
+		var s = SECTIONS[Home.sec];
+		if (s.search || Home.folder) return;
+		Home.cache[Home.cacheKey(Home.sec)] = s.shelves ? { rows: Shelf.rows, ts: +new Date() }
+			: { items: Home.items.slice(0), page: Home.page, pages: Home.pages, ts: +new Date() };
+	},
+
 	load: function (sec, keepFolder) {
+		if (!keepFolder && Home.fromCache(sec)) return;
 		if (sec !== Home.sec || !keepFolder) Home.folder = null;
 		Home.sec = sec;
 		Home.seen = {};
@@ -382,6 +440,7 @@ var Home = {
 			Home.items = Home.items.concat(items);
 			if (pag) { Home.page = pag.current; Home.pages = pag.total; }
 			else { Home.page = 1; Home.pages = 1; }
+			Home.remember();
 			Home.renderGrid();
 		};
 		if (s.watching) {
@@ -421,7 +480,7 @@ var Home = {
 		for (var i = from; i < to; i++) {
 			var it = Home.items[i];
 			var r = Math.floor(i / COLS) - Home.top, c = i % COLS;
-			h += cardHtml(it, Home.area === 'grid' && i === Home.idx, c * CW, r * RH, SECTIONS[Home.sec].badge);
+			h += cardHtml('g' + i, it, Home.area === 'grid' && i === Home.idx, c * CW, r * RH, SECTIONS[Home.sec].badge);
 		}
 		$('grid').innerHTML = h;
 		$('gridEmpty').innerHTML = Home.items.length ? '' : (SECTIONS[Home.sec].search ? (Home.query.length < 2 ? 'Набери название пультом' : 'Ничего не нашлось') : 'Пусто');
@@ -445,7 +504,7 @@ var Home = {
 			h += '<div class="kr" style="padding-left:' + (i === 0 || i === out.length - 1 ? 0 : i * 16) + 'px">';
 			for (var j = 0; j < out[i].length; j++) {
 				var kk = out[i][j];
-				h += '<div class="kk' + (kk.id !== 'ch' ? ' wide' : '') + (kk.cls || '') +
+				h += '<div id="k' + i + '_' + j + '" class="kk' + (kk.id !== 'ch' ? ' wide' : '') + (kk.cls || '') +
 					(Home.area === 'kb' && i === Home.kbRow && j === Home.kbCol ? ' focus' : '') + '">' + esc(kk.label) + '</div>';
 			}
 			h += '</div>';
@@ -459,8 +518,7 @@ var Home = {
 		else if (kk.id === 'space') Home.query += ' ';
 		else if (kk.id === 'back') Home.query = Home.query.slice(0, -1);
 		else if (kk.id === 'clear') Home.query = '';
-		else if (kk.id === 'lang') Home.lang = Home.lang === 'ru' ? 'en' : 'ru';
-		Home.renderKb();
+		else if (kk.id === 'lang') { Home.lang = Home.lang === 'ru' ? 'en' : 'ru'; Home.renderKb(); }
 		$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#f5a623">|</span>';
 		clearTimeout(Home.searchTimer);
 		Home.searchTimer = setTimeout(Home.doSearch, 700);
@@ -495,12 +553,14 @@ var Home = {
 			else return;
 		}
 		if (d === 1 && i % COLS === 0) return;
+		var old = Home.idx, oldTop = Home.top;
 		Home.idx = i;
 		var row = Math.floor(i / COLS), rows = Home.rows();
 		if (row < Home.top) Home.top = row;
 		if (row >= Home.top + rows) Home.top = row - rows + 1;
 		if (n - i <= COLS * 2) Home.more();
-		Home.renderGrid();
+		if (Home.top === oldTop) moveFocus('g' + old, 'g' + i);
+		else Home.renderGrid();
 	},
 
 	key: function (k) {
@@ -508,9 +568,10 @@ var Home = {
 		if (Home.area === 'menu') {
 			// the menu wraps around: up from the top lands on Search, down from Search on the top
 			var n = SECTIONS.length;
-			if (k === K.UP) { Home.load((Home.sec + n - 1) % n); Home.renderMenu(); }
-			else if (k === K.DOWN) { Home.load((Home.sec + 1) % n); Home.renderMenu(); }
+			if (k === K.UP) Home.browse((Home.sec + n - 1) % n);
+			else if (k === K.DOWN) Home.browse((Home.sec + 1) % n);
 			else if (k === K.RIGHT || k === K.ENTER) {
+				if (Home.loadTimer) { clearTimeout(Home.loadTimer); Home.loadTimer = null; Home.load(Home.sec); }
 				if (s.search) { Home.area = 'kb'; Home.renderKb(); }
 				else if (Home.items.length || (s.shelves && Shelf.rows.length)) { Home.area = 'grid'; Home.renderGrid(); }
 				Home.renderMenu();
@@ -520,6 +581,7 @@ var Home = {
 		}
 		if (Home.area === 'kb') {
 			var rowsN = Home.kbRows.length, rowLen = Home.kbRows[Home.kbRow].length;
+			var oKey = 'k' + Home.kbRow + '_' + Home.kbCol;
 			if (k === K.LEFT) { if (Home.kbCol === 0) { Home.area = 'menu'; Home.renderMenu(); } else Home.kbCol--; }
 			else if (k === K.RIGHT) { if (Home.kbCol < rowLen - 1) Home.kbCol++; }
 			else if (k === K.UP) { if (Home.kbRow > 0) Home.kbVert(-1); }
@@ -538,7 +600,8 @@ var Home = {
 					$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#f5a623">|</span>';
 				}
 			}
-			Home.renderKb();
+			if (Home.area === 'kb') moveFocus(oKey, 'k' + Home.kbRow + '_' + Home.kbCol);
+			else setClass(oKey, 'focus', false);
 			return;
 		}
 		if (s.shelves) { Shelf.key(k); return; }
@@ -560,13 +623,13 @@ var Home = {
 	}
 };
 
-function cardHtml(it, focus, x, y, badgeKind) {
+function cardHtml(id, it, focus, x, y, badgeKind) {
 	var body;
 	if (it.folder) body = '<div class="pw folder"><div class="ft">' + esc(it.title) + '</div><div class="fc">' + (it.count || 0) + '</div></div><div class="t"></div>';
 	else body = '<div class="pw"><img src="' + esc(it.posters ? it.posters.small : '') + '" /></div>' +
 		(badgeKind === 'new' && it['new'] ? '<div class="badge">+' + it['new'] + '</div>' : '') +
 		'<div class="t">' + esc(shortTitle(it.title)) + '</div>';
-	return '<div class="card' + (focus ? ' focus' : '') + '" style="left:' + x + 'px;top:' + y + 'px">' + body + '</div>';
+	return '<div id="' + id + '" class="card' + (focus ? ' focus' : '') + '" style="left:' + x + 'px;top:' + y + 'px">' + body + '</div>';
 }
 
 /* ---------- "Главная": horizontal shelves ---------- */
@@ -586,6 +649,7 @@ var Shelf = {
 					if (id !== Home.reqId) return;
 					UI.loading(false);
 					row.items = r.items || [];
+					Home.remember();
 					Shelf.render();
 				}, function () {});
 			})(row, SHELVES[i].path);
@@ -596,9 +660,9 @@ var Shelf = {
 		var h = '', focus = Home.area === 'grid';
 		for (var r = Shelf.top; r < Shelf.rows.length && r < Shelf.top + 2; r++) {
 			var row = Shelf.rows[r], y = (r - Shelf.top) * SH;
-			h += '<div class="shelf-t' + (focus && r === Shelf.si ? ' active' : '') + '" style="top:' + y + 'px">' + esc(row.title) + '</div>';
+			h += '<div id="st' + r + '" class="shelf-t' + (focus && r === Shelf.si ? ' active' : '') + '" style="top:' + y + 'px">' + esc(row.title) + '</div>';
 			for (var i = row.off; i < row.items.length && i < row.off + COLS; i++)
-				h += cardHtml(row.items[i], focus && r === Shelf.si && i === row.idx, (i - row.off) * CW, y + 28);
+				h += cardHtml('s' + r + '_' + i, row.items[i], focus && r === Shelf.si && i === row.idx, (i - row.off) * CW, y + 28);
 		}
 		$('grid').innerHTML = h;
 		$('gridEmpty').innerHTML = '';
@@ -606,6 +670,7 @@ var Shelf = {
 
 	key: function (k) {
 		var row = Shelf.rows[Shelf.si];
+		var oSi = Shelf.si, oTop = Shelf.top, oIdx = row.idx, oOff = row.off;
 		if (k === K.LEFT) {
 			if (row.idx > 0) { row.idx--; if (row.idx < row.off) row.off = row.idx; }
 			else { Home.area = 'menu'; Home.renderMenu(); }
@@ -615,7 +680,11 @@ var Shelf = {
 		else if (k === K.DOWN && Shelf.si < Shelf.rows.length - 1) { Shelf.si++; if (Shelf.si > Shelf.top + 1) Shelf.top = Shelf.si - 1; }
 		else if (k === K.RETURN) { Home.area = 'menu'; Home.renderMenu(); }
 		else if (k === K.ENTER && row.items[row.idx]) { Item.open(row.items[row.idx].id); return; }
-		Shelf.render();
+		if (Home.area !== 'grid') { setClass('s' + oSi + '_' + oIdx, 'focus', false); setClass('st' + oSi, 'active', false); return; }
+		// redraw only when the visible window scrolled
+		if (Shelf.top !== oTop || row.off !== oOff) { Shelf.render(); return; }
+		moveFocus('s' + oSi + '_' + oIdx, 's' + Shelf.si + '_' + Shelf.rows[Shelf.si].idx);
+		if (Shelf.si !== oSi) { setClass('st' + oSi, 'active', false); setClass('st' + Shelf.si, 'active', true); }
 	}
 };
 
@@ -958,8 +1027,8 @@ var Player = {
 		Player.fit();
 		if (Player.plugin) { var d = Player.plugin.GetDuration(); if (d > 0) Player.duration = d / 1000; }
 	},
-	onBufStart: function () { Screen.log('player_buf_start'); Player.bufferingUi(true); },
-	onBufEnd: function () { Screen.log('player_buf_end'); Player.bufferingUi(false); },
+	onBufStart: function () { Player.bufferingUi(true); },
+	onBufEnd: function () { Player.bufferingUi(false); },
 	onEnd: function () {
 		if (!Player.active) return;
 		if (Player.duration && Player.time < Player.duration - 90) {
@@ -1186,10 +1255,68 @@ var Player = {
 
 /* ---------- app ---------- */
 
+// Screen markup lives here, not in index.html, so a remote update can change it too.
+var MARKUP = [
+	'<div id="app">',
+	'	<div id="auth" class="screen">',
+	'		<div class="logo">KinoPub</div>',
+	'		<div class="auth-text">Открой на телефоне или компьютере</div>',
+	'		<div class="auth-url" id="authUrl">kino.watch/device</div>',
+	'		<div class="auth-text">и введи код</div>',
+	'		<div class="auth-code" id="authCode">…</div>',
+	'		<div class="auth-hint" id="authHint"></div>',
+	'	</div>',
+	'',
+	'	<div id="home" class="screen">',
+	'		<div id="menu"></div>',
+	'		<div id="content">',
+	'			<div id="sectionTitle"></div>',
+	'			<div id="searchBox">',
+	'				<div id="searchQuery"></div>',
+	'				<div id="keyboard"></div>',
+	'			</div>',
+	'			<div id="grid"></div>',
+	'			<div id="gridEmpty"></div>',
+	'		</div>',
+	'	</div>',
+	'',
+	'	<div id="item" class="screen">',
+	'		<div id="itemBg"></div>',
+	'		<img id="itemPoster" src="" alt="" />',
+	'		<div id="itemInfo">',
+	'			<div id="itemTitle"></div>',
+	'			<div id="itemMeta"></div>',
+	'			<div id="itemPlot"></div>',
+	'			<div id="seasons"></div>',
+	'			<div id="episodes"></div>',
+	'		</div>',
+	'		<div id="itemHints"><span class="k green"></span> качество: <span id="qualityLabel"></span>&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> с начала&nbsp;&nbsp;&nbsp;<span class="k red"></span> отметить просмотренным&nbsp;&nbsp;&nbsp;<span class="k blue"></span> размер экрана</div>',
+	'	</div>',
+	'',
+	'	<div id="loading">Загрузка…</div>',
+	'	<div id="toast"></div>',
+	'</div>',
+	'',
+	'<div id="osd">',
+	'	<div id="osdTitle"></div>',
+	'	<div id="osdBar"><div id="osdProgress"></div><div id="osdSeek"></div></div>',
+	'	<div id="osdTime"></div>',
+	'	<div id="osdState"></div>',
+	'	<div id="osdHints"></div>',
+	'</div>',
+	'<div id="subs"></div>',
+	'<div id="audioMenu"></div>',
+	'<div id="playerToast"></div>',
+	'<div id="buffering">Буферизация…</div>',
+	'<div id="zoomInfo"></div>'
+].join('\n');
+
+
 var App = {
 	handler: null,
 
 	init: function () {
+		if (!$('app')) $('root').innerHTML = MARKUP;
 		Store.init();
 		Screen.init();
 		Player.init();
@@ -1220,7 +1347,6 @@ var App = {
 
 	onKey: function (e) {
 		var k = e.keyCode;
-		if (Player.active) Screen.log('key ' + k + (Player.menu ? ' menu' : ''));
 		if (k === K.RETURN && widgetAPI) widgetAPI.blockNavigation(e);
 		if (k === K.EXIT) {
 			if (Player.active) { Player.save(); if (Player.plugin) Player.plugin.Stop(); }
