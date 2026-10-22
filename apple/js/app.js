@@ -1,6 +1,7 @@
 /* KP Apple: a design study of the Kinopub app in the style of Apple's TV app.
    Static demo data (js/data.js), no login, no playback. ES5 for the 2013 TV. */
 
+var VERSION = '__VERSION__'; // filled in when the proxy builds the app
 var widgetAPI = (typeof Common !== 'undefined') ? new Common.API.Widget() : null;
 var tvKey = (typeof Common !== 'undefined') ? new Common.API.TVKeyValue() : null;
 var K = tvKey ? {
@@ -18,7 +19,9 @@ function setClass(el, cls, on) {
 	if (on && !has) el.className += ' ' + cls;
 	else if (!on && has) el.className = (' ' + el.className + ' ').replace(' ' + cls + ' ', ' ').replace(/^\s+|\s+$/g, '');
 }
-function move(el, x, y) { el.style.webkitTransform = 'translate(' + x + 'px,' + y + 'px)'; }
+// Plain margins rather than transforms: on this TV's WebKit a transform means a
+// separate software-composited layer, slower than one ordinary repaint.
+function move(el, x, y) { el.style.marginLeft = x + 'px'; el.style.marginTop = y + 'px'; }
 function duration(it) {
 	if (it.eps) return it.eps.seasons + (it.eps.seasons === 1 ? ' сезон' : it.eps.seasons < 5 ? ' сезона' : ' сезонов');
 	var m = Math.round((it.dur || 0) / 60);
@@ -43,7 +46,7 @@ var VIEW = 880; // 960 minus the 40 px safe area on both sides
 /* ---------- home ---------- */
 
 var Home = {
-	zone: 'hero', tab: 0, btn: 0, hero: 0, rows: [], r: 0, bgFront: 0,
+	zone: 'hero', tab: 0, btn: 0, hero: 0, rows: [], r: 0,
 	TABS: ['Смотреть', 'Фильмы', 'Сериалы', 'Поиск'],
 
 	build: function () {
@@ -68,19 +71,17 @@ var Home = {
 		$('column').innerHTML = h;
 		var t = '<span class="tabbar">';
 		for (var j = 0; j < Home.TABS.length; j++) t += '<span class="tab' + (j === 0 ? ' sel' : '') + '" id="tab' + j + '">' + Home.TABS[j] + '</span>';
-		$('tabs').innerHTML = t + '</span>';
+		$('tabs').innerHTML = t + '</span><span class="ver">v' + VERSION + '</span>';
 		Home.showHero(0);
 		Home.focus();
 	},
 
-	// The hero crossfades between two image layers.
+	// One image layer, swapped at once: a crossfade of two full-screen images
+	// is the most expensive thing in this design for a 2013 TV.
 	showHero: function (n) {
 		Home.hero = (n + DATA.hero.length) % DATA.hero.length;
 		var it = item(DATA.hero[Home.hero]);
-		var back = $('bg' + (1 - Home.bgFront)), front = $('bg' + Home.bgFront);
-		back.src = it.bg;
-		setClass(back, 'on', true); setClass(front, 'on', false);
-		Home.bgFront = 1 - Home.bgFront;
+		$('bg0').src = it.bg;
 		$('heroEyebrow').innerHTML = it.eps ? 'Сериал' : 'Фильм';
 		$('heroTitle').innerHTML = esc(it.title);
 		$('heroMeta').innerHTML = metaLine(it);
@@ -99,6 +100,7 @@ var Home = {
 		setClass('hb0', 'focus', Home.zone === 'hero' && Home.btn === 0);
 		setClass('hb1', 'focus', Home.zone === 'hero' && Home.btn === 1);
 		setClass('tabs', 'away', inRows);
+		$('bg0').style.opacity = inRows ? '0.3' : '1'; // dim the hero behind the shelves, at once
 		var y = 0;
 		if (inRows) {
 			y = 380;

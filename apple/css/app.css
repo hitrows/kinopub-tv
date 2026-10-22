@@ -1,77 +1,81 @@
 /* KP Apple: a design study of the Kinopub app the way Apple's TV app looks.
-   Laid out in the TV's 960x540 plane: Apple's tvOS points / 2. */
+   Laid out in the TV's 960x540 plane (tvOS points / 2).
+
+   Built for a 2013 TV: no transitions, blurred shadows, gradients or
+   transform scaling (each forces many software repaints, and scaling text
+   makes it ragged). Scrims are baked into the artwork; the focused card grows
+   by its real width and height, so captions stay crisp. */
 * { margin: 0; padding: 0; }
 body { width: 960px; height: 540px; overflow: hidden; background: #000; color: #fff; font-family: Arial, Helvetica, sans-serif; }
 #anchor { position: absolute; width: 1px; height: 1px; }
-.page { position: absolute; left: 0; top: 0; width: 960px; height: 540px; overflow: hidden; opacity: 0; -webkit-transition: opacity 0.3s; }
-.page.on { opacity: 1; }
-
-/* full-bleed artwork with the scrims Apple puts under text */
+.page { position: absolute; left: 0; top: 0; width: 960px; height: 540px; overflow: hidden; display: none; }
+.page.on { display: block; }
 .bg { position: absolute; left: 0; top: 0; width: 960px; height: 540px; }
-.bg img { position: absolute; left: 0; top: 0; width: 960px; height: 540px; opacity: 0; -webkit-transition: opacity 0.6s; }
-.bg img.on { opacity: 1; }
-.scrim-l { position: absolute; left: 0; top: 0; width: 960px; height: 540px; background: -webkit-linear-gradient(left, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.55) 40%, rgba(0,0,0,0) 75%); }
-.scrim-b { position: absolute; left: 0; top: 240px; width: 960px; height: 300px; background: -webkit-linear-gradient(top, rgba(0,0,0,0) 0%, rgba(0,0,0,0.9) 70%, #000 100%); }
 
-/* tab bar: translucent, selected tab opaque (HIG: 68 pt high, 46 pt from the top) */
-#tabs { position: absolute; top: 23px; left: 0; width: 960px; text-align: center; -webkit-transition: top 0.3s, opacity 0.3s; }
-#tabs.away { top: -50px; opacity: 0; }
-.tabbar { display: inline-block; padding: 4px; height: 26px; border-radius: 17px; background: rgba(120,120,128,0.32); }
-.tab { display: inline-block; height: 26px; line-height: 26px; padding: 0 16px; border-radius: 13px; font-size: 15px; color: rgba(255,255,255,0.75); -webkit-transition: -webkit-transform 0.15s; }
-.tab.sel { background: rgba(255,255,255,0.22); color: #fff; }
-.tab.focus { background: #fff; color: #000; -webkit-transform: scale(1.08); box-shadow: 0 6px 14px rgba(0,0,0,0.5); }
+/* tab bar (HIG: 68 pt high, 46 pt from the top); selected tab lighter, focused tab white */
+#tabs { position: absolute; top: 23px; left: 0; width: 960px; text-align: center; }
+#tabs.away { display: none; }
+.tabbar { display: inline-block; padding: 4px; height: 28px; border-radius: 18px; background: #2c2c30; }
+.tab { display: inline-block; height: 28px; line-height: 28px; padding: 0 16px; border-radius: 14px; font-size: 16px; color: #c7c7cc; }
+.tab.sel { background: #48484e; color: #fff; }
+.tab.focus { background: #fff; color: #000; }
 
-/* home: hero and shelves scroll as one column */
-#column { position: absolute; left: 0; top: 0; width: 960px; -webkit-transition: -webkit-transform 0.35s ease-out; }
+/* home: hero and shelves are one column that jumps (no animation) */
+#column { position: absolute; left: 0; top: 0; width: 960px; }
 .hero { position: relative; height: 380px; }
 .hero-info { position: absolute; left: 40px; bottom: 34px; width: 470px; }
-.eyebrow { font-size: 12px; letter-spacing: 1px; color: rgba(255,255,255,0.6); text-transform: uppercase; margin-bottom: 6px; }
-.big-title { font-size: 36px; line-height: 40px; font-weight: bold; text-shadow: 0 2px 10px rgba(0,0,0,0.5); }
-.meta { margin-top: 8px; font-size: 13px; color: rgba(255,255,255,0.7); }
-.meta b { display: inline-block; padding: 0 4px; margin-right: 6px; border: 1px solid rgba(255,255,255,0.5); border-radius: 3px; font-size: 10px; line-height: 14px; font-weight: normal; vertical-align: 1px; }
-.plot { margin-top: 10px; font-size: 14px; line-height: 19px; color: rgba(255,255,255,0.85); height: 38px; overflow: hidden; }
-.buttons { margin-top: 16px; height: 34px; }
-.btn { display: inline-block; height: 34px; line-height: 34px; padding: 0 20px; margin-right: 10px; border-radius: 17px; background: rgba(120,120,128,0.36); font-size: 15px; font-weight: bold; color: #fff; -webkit-transition: -webkit-transform 0.15s; }
-.btn.primary { background: rgba(255,255,255,0.88); color: #000; }
-.btn.round { width: 34px; padding: 0; text-align: center; font-size: 20px; }
-.btn.focus { background: #fff; color: #000; -webkit-transform: scale(1.1); box-shadow: 0 8px 18px rgba(0,0,0,0.55); }
+.eyebrow { font-size: 14px; color: #aeaeb2; margin-bottom: 6px; }
+.big-title { font-size: 36px; line-height: 42px; font-weight: bold; }
+.meta { margin-top: 8px; font-size: 14px; color: #c7c7cc; }
+.meta b { display: inline-block; padding: 0 4px; margin-right: 6px; border: 1px solid #8e8e93; border-radius: 3px; font-size: 12px; line-height: 16px; font-weight: normal; color: #e5e5ea; }
+.plot { margin-top: 10px; font-size: 15px; line-height: 20px; color: #e5e5ea; height: 40px; overflow: hidden; }
+.buttons { margin-top: 16px; height: 36px; }
+.btn { display: inline-block; height: 36px; line-height: 36px; padding: 0 20px; margin-right: 10px; border-radius: 18px; background: #3a3a3f; font-size: 16px; font-weight: bold; color: #fff; }
+.btn.primary { background: #d1d1d6; color: #000; }
+.btn.round { width: 36px; padding: 0; text-align: center; font-size: 22px; }
+.btn.focus { background: #fff; color: #000; }
 .dots { position: absolute; right: 40px; bottom: 40px; }
-.dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 3px; background: rgba(255,255,255,0.35); }
+.dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 3px; background: #636366; }
 .dot.on { background: #fff; }
 
 .shelf { position: relative; height: 200px; margin-left: 40px; }
 .shelf.poster { height: 268px; }
-.shelf h2 { font-size: 17px; font-weight: bold; height: 30px; color: rgba(255,255,255,0.92); }
-.row { position: absolute; left: 0; top: 30px; height: 240px; width: 2000px; -webkit-transition: -webkit-transform 0.3s ease-out; }
+.shelf h2 { font-size: 18px; font-weight: bold; height: 30px; color: #f2f2f7; }
+.row { position: absolute; left: 0; top: 30px; height: 240px; width: 3000px; }
 
-/* cards: unfocused flat, focused lifted with a highlight (the tvOS focus look) */
-.card { position: absolute; top: 0; border-radius: 6px; -webkit-transition: -webkit-transform 0.15s ease-out; }
-.card .art { position: relative; overflow: hidden; border-radius: 6px; background: #1c1c1e; }
+/* cards: focus = a white ring and a real (not scaled) size bump */
+.card { position: absolute; top: 0; }
+.card .art { position: relative; overflow: hidden; border-radius: 6px; background: #1c1c1e; border: 3px solid transparent; }
 .card img { display: block; }
-.card .shine { position: absolute; left: 0; top: 0; right: 0; bottom: 0; background: -webkit-linear-gradient(-30deg, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0) 45%); opacity: 0; }
-.card .cap { margin-top: 8px; font-size: 13px; color: rgba(255,255,255,0.6); white-space: nowrap; overflow: hidden; }
-.card.focus { -webkit-transform: scale(1.1); z-index: 2; }
-.card.focus .art { box-shadow: 0 12px 24px rgba(0,0,0,0.7); }
-.card.focus .shine { opacity: 1; }
+.card .cap { margin-top: 6px; font-size: 14px; color: #8e8e93; white-space: nowrap; overflow: hidden; }
+.card.focus { z-index: 2; }
+.card.focus .art { border-color: #fff; }
 .card.focus .cap { color: #fff; }
 .card.wide .art, .card.wide img { width: 200px; height: 113px; }
+.card.wide.focus { margin: -6px 0 0 -10px; }
+.card.wide.focus .art, .card.wide.focus img { width: 220px; height: 124px; }
+.card.wide .cap { width: 206px; }
 .card.poster .art, .card.poster img { width: 130px; height: 195px; }
-.bar { position: absolute; left: 10px; right: 10px; bottom: 8px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.3); }
+.card.poster.focus { margin: -10px 0 0 -7px; }
+.card.poster.focus .art, .card.poster.focus img { width: 144px; height: 216px; }
+.card.poster .cap { width: 136px; }
+.bar { position: absolute; left: 10px; right: 10px; bottom: 8px; height: 4px; border-radius: 2px; background: #636366; }
 .bar i { display: block; height: 4px; border-radius: 2px; background: #fff; }
 
 /* detail page */
-#detail .info { position: absolute; left: 40px; top: 150px; width: 520px; -webkit-transition: -webkit-transform 0.35s ease-out; }
-#detail .big-title { font-size: 40px; line-height: 44px; }
-#detail .orig { font-size: 15px; color: rgba(255,255,255,0.6); margin-top: 4px; }
-#detail .plot { height: 57px; }
-.ratings { margin-top: 10px; font-size: 13px; color: rgba(255,255,255,0.75); }
+#detail .info { position: absolute; left: 40px; top: 150px; width: 520px; }
+#detail .big-title { font-size: 40px; line-height: 46px; }
+#detail .orig { font-size: 16px; color: #aeaeb2; margin-top: 2px; }
+#detail .plot { height: 60px; }
+.ratings { margin-top: 10px; font-size: 14px; color: #c7c7cc; }
 .ratings span { margin-right: 14px; }
-#more { position: absolute; left: 0; top: 540px; width: 960px; -webkit-transition: -webkit-transform 0.35s ease-out; }
-.ep { position: absolute; top: 0; width: 200px; height: 96px; border-radius: 8px; background: rgba(120,120,128,0.24); padding: 0; -webkit-transition: -webkit-transform 0.15s ease-out; }
-.ep .n { position: absolute; left: 12px; top: 10px; font-size: 12px; color: rgba(255,255,255,0.6); }
-.ep .t { position: absolute; left: 12px; right: 12px; top: 28px; height: 38px; overflow: hidden; font-size: 14px; line-height: 19px; font-weight: bold; }
-.ep .d { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: rgba(255,255,255,0.6); }
-.ep.focus { background: #fff; color: #000; -webkit-transform: scale(1.1); z-index: 2; box-shadow: 0 10px 22px rgba(0,0,0,0.6); }
-.ep.focus .n, .ep.focus .d { color: rgba(0,0,0,0.6); }
+#more { position: absolute; left: 0; top: 540px; width: 960px; }
+.ep { position: absolute; top: 0; width: 200px; height: 96px; border-radius: 8px; background: #2c2c30; border: 3px solid transparent; }
+.ep .n { position: absolute; left: 12px; top: 10px; font-size: 14px; color: #aeaeb2; }
+.ep .t { position: absolute; left: 12px; right: 12px; top: 32px; height: 38px; overflow: hidden; font-size: 15px; line-height: 19px; font-weight: bold; }
+.ep .d { position: absolute; left: 12px; bottom: 8px; font-size: 14px; color: #aeaeb2; }
+.ep.focus { background: #fff; color: #000; border-color: #fff; }
+.ep.focus .n, .ep.focus .d { color: #48484a; }
 
-#toast { position: absolute; left: 330px; top: 470px; width: 300px; padding: 10px 0; border-radius: 18px; text-align: center; background: rgba(40,40,44,0.92); font-size: 14px; display: none; }
+#toast { position: absolute; left: 330px; top: 470px; width: 300px; padding: 10px 0; border-radius: 18px; text-align: center; background: #2c2c30; font-size: 15px; display: none; }
+.ver { position: absolute; right: 40px; top: 8px; font-size: 14px; color: #636366; }

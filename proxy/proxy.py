@@ -289,7 +289,7 @@ def variants():
         out.append(local)
     if APPLE_DIR:
         out.append({"id": "KPApple", "title": "KP Apple", "proxy": CLOUD_URL or PUBLIC, "cloud": "1",
-                    "tv": APPLE_DIR, "version": "0.1"})
+                    "tv": APPLE_DIR, "version": app_version(APPLE_DIR)})
     return out
 
 
