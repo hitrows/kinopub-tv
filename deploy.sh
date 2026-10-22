@@ -11,8 +11,10 @@ cd "$(dirname "$0")"
 [ -f deploy.env ] || { echo "deploy.env is missing (see the comment at the top of deploy.sh)"; exit 1; }
 . ./deploy.env
 
+# ./deploy.sh        -> 1.0 becomes 1.1
+# ./deploy.sh 2.0    -> exactly 2.0
 LAST=$(cat VERSION 2>/dev/null || echo 0.0)
-V=$(echo "$LAST" | awk -F. '{ printf "%d.%d", $1, $2 + 1 }')
+V=${1:-$(echo "$LAST" | awk -F. '{ printf "%d.%d", $1, $2 + 1 }')}
 echo "$V" > VERSION
 
 rsync -a --delete --exclude .DS_Store tv proxy VERSION "$DEPLOY_HOST:$DEPLOY_DIR/"

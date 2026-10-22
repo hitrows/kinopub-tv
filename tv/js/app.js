@@ -6,7 +6,9 @@ if (PROXY.charAt(0) === '_') {
 	var pm = /[?&]proxy=([^&]+)/.exec(location.search);
 	PROXY = pm ? decodeURIComponent(pm[1]) : 'http://localhost/kp';
 }
-var VERSION = '__VERSION__'; // filled in by deploy.sh
+var VERSION = '__VERSION__'; // filled in when the app is built
+// Cloud build: the server keeps nothing, the TV holds its own Kinopub token.
+var CLOUD = '__CLOUD__' === '1' || /[?&]cloud=1/.test(location.search);
 
 var widgetAPI = (typeof Common !== 'undefined') ? new Common.API.Widget() : null;
 var tvKey = (typeof Common !== 'undefined') ? new Common.API.TVKeyValue() : null;
@@ -36,24 +38,91 @@ function fmtTime(sec) {
 }
 function shortTitle(t) { return String(t || '').split(' / ')[0]; }
 
+/* ---------- storage (cloud build keeps the token on the TV) ---------- */
+
+// localStorage when the TV really persists it, else the Orsay FileSystem API.
+var Store = {
+	kind: null, fs: null, FILE: 'kptv.json', data: {},
+
+	init: function () {
+		try {
+			window.localStorage.setItem('kp_probe', '1');
+			if (window.localStorage.getItem('kp_probe') === '1') {
+				Store.kind = 'ls';
+				Store.data = JSON.parse(window.localStorage.getItem('kp_data') || '{}');
+				return;
+			}
+		} catch (e) {}
+		try {
+			Store.fs = new FileSystem();
+			var dir = curWidget.id;
+			if (!Store.fs.isValidCommonPath(dir)) Store.fs.createCommonDir(dir);
+			Store.FILE = dir + '/kptv.json';
+			var f = Store.fs.openCommonFile(Store.FILE, 'r');
+			if (f) { Store.data = JSON.parse(f.readAll() || '{}'); Store.fs.closeCommonFile(f); }
+			Store.kind = 'fs';
+		} catch (e2) { Store.kind = 'mem'; }
+	},
+
+	get: function (k) { return Store.data[k]; },
+
+	set: function (k, v) {
+		if (v === null || v === undefined) delete Store.data[k]; else Store.data[k] = v;
+		var json = JSON.stringify(Store.data);
+		try {
+			if (Store.kind === 'ls') window.localStorage.setItem('kp_data', json);
+			else if (Store.kind === 'fs') {
+				var f = Store.fs.openCommonFile(Store.FILE, 'w');
+				f.writeAll(json); Store.fs.closeCommonFile(f);
+			}
+		} catch (e) { Screen.log('store_error ' + Store.kind + ' ' + e); }
+	}
+};
+
 /* ---------- network ---------- */
 
 var Net = {
-	get: function (path, ok, fail) {
+	// Cloud build: an expired token is refreshed once, then the request is retried.
+	refreshing: null,
+	refresh: function (done) {
+		var tok = Store.get('token');
+		if (!tok || !tok.refresh_token) { done(false); return; }
+		if (Net.refreshing) { Net.refreshing.push(done); return; }
+		Net.refreshing = [done];
+		Net.raw('/auth/refresh?rt=' + encodeURIComponent(tok.refresh_token), function (status, data) {
+			var ok = status === 200 && data && data.access_token;
+			if (ok) Store.set('token', data);
+			var cbs = Net.refreshing; Net.refreshing = null;
+			for (var i = 0; i < cbs.length; i++) cbs[i](!!ok);
+		});
+	},
+
+	raw: function (path, cb) {
 		var xhr = new XMLHttpRequest();
 		var done = false;
-		var timer = setTimeout(function () { if (!done) { done = true; xhr.abort(); (fail || Net.fail)('Сервер не отвечает'); } }, 20000);
+		var timer = setTimeout(function () { if (!done) { done = true; xhr.abort(); cb(0, null); } }, 20000);
 		xhr.onreadystatechange = function () {
 			if (xhr.readyState !== 4 || done) return;
 			done = true; clearTimeout(timer);
 			var data = null;
 			try { data = JSON.parse(xhr.responseText); } catch (e) {}
-			if (xhr.status === 200 && data) ok(data);
-			else if (xhr.status === 401) App.showAuth();
-			else (fail || Net.fail)((data && data.error) ? data.error : 'Ошибка сети (' + xhr.status + ')');
+			cb(xhr.status, data);
 		};
 		xhr.open('GET', PROXY + path, true);
+		var tok = CLOUD && Store.get('token');
+		if (tok) xhr.setRequestHeader('X-KP-Token', tok.access_token);
 		xhr.send(null);
+	},
+
+	get: function (path, ok, fail, retried) {
+		Net.raw(path, function (status, data) {
+			if (status === 200 && data) ok(data);
+			else if (status === 401 && CLOUD && !retried)
+				Net.refresh(function (good) { if (good) Net.get(path, ok, fail, true); else App.showAuth(); });
+			else if (status === 401) App.showAuth();
+			else if (status === 0) (fail || Net.fail)('Сервер не отвечает');
+			else (fail || Net.fail)((data && data.error) ? data.error : 'Ошибка сети (' + status + ')');
+		});
 	},
 	api: function (path, ok, fail) { Net.get('/api/' + path, ok, fail); },
 	fail: function (msg) { UI.loading(false); UI.toast(msg); }
@@ -152,6 +221,7 @@ var Auth = {
 			$('authCode').innerHTML = esc(r.user_code);
 			$('authUrl').innerHTML = esc(String(r.verification_uri).replace(/^https?:\/\//, ''));
 			$('authHint').innerHTML = 'Код действует ' + Math.round(r.expires_in / 60) + ' мин. Ждём подтверждения…';
+			Auth.code = r.code || null;
 			Auth.poll(+new Date() + r.expires_in * 1000, (r.interval || 5) * 1000);
 		});
 	},
@@ -159,8 +229,9 @@ var Auth = {
 		clearTimeout(Auth.timer);
 		Auth.timer = setTimeout(function () {
 			if (+new Date() > deadline) { Auth.start(); return; }
-			Net.get('/auth/poll', function (r) {
-				if (r.authorized) Home.open();
+			Net.get('/auth/poll' + (CLOUD ? '?code=' + encodeURIComponent(Auth.code || '') : ''), function (r) {
+				if (CLOUD && r.access_token) { Store.set('token', r); Home.open(); }
+				else if (r.authorized) Home.open();
 				else Auth.poll(deadline, every);
 			}, function () { Auth.poll(deadline, every); });
 		}, every);
@@ -245,7 +316,7 @@ var Home = {
 	},
 
 	renderMenu: function () {
-		var h = '<div class="logo"><img src="img/logo-24.png" alt="" />kinopub <span class="ver">v' + VERSION + '</span></div>';
+		var h = '<div class="logo"><img src="img/logo-24.png" alt="" />kinopub <span class="ver">v' + VERSION + (CLOUD ? '' : 'L') + '</span></div>';
 		for (var i = 0; i < SECTIONS.length; i++) {
 			var c = 'mi' + (i === Home.sec ? ' active' : '') + (Home.area === 'menu' && i === Home.sec ? ' focus' : '');
 			h += '<div class="' + c + '"><span class="ico" style="background-position:-' + (i * 16) + 'px 0"></span>' + esc(SECTIONS[i].title) + '</div>';
@@ -1119,6 +1190,7 @@ var App = {
 	handler: null,
 
 	init: function () {
+		Store.init();
 		Screen.init();
 		Player.init();
 		if (widgetAPI) widgetAPI.sendReadyEvent();
@@ -1127,6 +1199,11 @@ var App = {
 			e = e || window.event;
 			if ((e.target || e.srcElement) !== $('anchor')) App.onKey(e); // anchor already handled it
 		};
+		if (CLOUD) {
+			Screen.log('store ' + Store.kind + ' token=' + (Store.get('token') ? 1 : 0));
+			if (Store.get('token')) Home.open(); else App.showAuth();
+			return;
+		}
 		Net.get('/auth/status', function (r) {
 			if (r.authorized) Home.open(); else App.showAuth();
 		}, function () {

@@ -12,10 +12,15 @@ Standard library only. Configuration (environment):
   KP_DATA     where the login token is kept (default ./data next to the repo)
   KP_CLIENT_ID / KP_CLIENT_SECRET  Kinopub API client (default: the public
               credentials of Kinopub's own Kodi add-on)
+  KP_CLOUD_URL  optional: also offer the cloud build of the app, which talks
+              to a Cloudflare Worker (worker/) at this URL instead of this proxy
+  KP_LOCAL    set to 0 to offer only the cloud build: then this proxy is needed
+              only while the TV installs the app
 
 App delivery (what the TV's "Start User App Sync" downloads):
-  GET /widgetlist.xml         -> list with one app, KinoPub
-  GET /Widget/KinoPub.zip     -> the app from ../tv, built on the fly
+  GET /widgetlist.xml         -> list of apps: "KP Local" (this proxy) and/or
+                                 "Kinopub" (cloud build, with KP_CLOUD_URL)
+  GET /Widget/<id>.zip        -> the app from ../tv, built on the fly
 
 API endpoints (optionally under a /kp prefix):
   GET /auth/status            -> {"authorized": bool}
@@ -243,7 +248,25 @@ def remote(b64):
 
 # ---------- the TV app, built on the fly ----------
 
-_widget = {"key": None, "zip": b""}
+_widget = {}
+
+CLOUD_URL = os.environ.get("KP_CLOUD_URL", "").rstrip("/")
+LOCAL = os.environ.get("KP_LOCAL", "1") != "0" or not CLOUD_URL
+
+
+def variants():
+    """The builds offered to the TV.
+
+    The ids are what the TV installs under, so they stay put even though the
+    names changed: the cloud build is the main "Kinopub" app, the build that
+    goes through this proxy is "KP Local" with an orange icon.
+    """
+    out = []
+    if CLOUD_URL:
+        out.append({"id": "KPOrsay", "title": "Kinopub", "proxy": CLOUD_URL, "cloud": "1"})
+    if LOCAL:
+        out.append({"id": "KinoPub", "title": "KP Local", "proxy": PUBLIC, "cloud": "0"})
+    return out
 
 
 def app_version():
@@ -254,8 +277,17 @@ def app_version():
         return "0.0"
 
 
-def widget_zip():
-    """Zip ../tv with this server's address baked in.
+def smarthub_version(version):
+    """Smart Hub shows an app's version only in its own x.yyy form: 0.9 -> 0.009."""
+    try:
+        major, minor = (int(x) for x in version.split(".")[:2])
+        return "%d.%03d" % (major, minor)
+    except ValueError:
+        return "0.000"
+
+
+def widget_zip(v):
+    """Zip ../tv with the variant's server address baked in.
 
     The TV caches app files by name across reinstalls, so app.js / app.css
     are renamed per version (app-<version>.js).
@@ -266,39 +298,49 @@ def widget_zip():
         for n in sorted(names):
             if not n.startswith("."):
                 files.append(os.path.join(base, n))
-    key = (version, PUBLIC, tuple((f, os.path.getmtime(f)) for f in files))
-    if _widget["key"] == key:
-        return _widget["zip"]
+    key = (version, v["proxy"], tuple((f, os.path.getmtime(f)) for f in files))
+    cached = _widget.get(v["id"])
+    if cached and cached[0] == key:
+        return cached[1]
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for path in files:
             rel = os.path.relpath(path, TV_DIR).replace(os.sep, "/")
+            local = v["cloud"] != "1"
+            if rel.startswith("img/local/"):
+                if not local:
+                    continue
+                rel = "img/" + rel[len("img/local/"):]  # the local build's orange icons
+            elif local and os.path.exists(os.path.join(TV_DIR, "img", "local", os.path.basename(rel))):
+                continue
             with open(path, "rb") as f:
                 data = f.read()
             if rel in ("index.html", "js/app.js", "css/app.css", "config.xml"):
                 text = data.decode("utf-8")
-                text = text.replace("__PROXY__", PUBLIC).replace("__VERSION__", version)
+                text = text.replace("__PROXY__", v["proxy"]).replace("__VERSION__", version)
+                text = text.replace("__CLOUD__", v["cloud"])
+                text = text.replace("<widgetname>KinoPub</widgetname>", "<widgetname>%s</widgetname>" % v["title"])
                 text = text.replace("js/app.js", "js/app-%s.js" % version)
                 text = text.replace("css/app.css", "css/app-%s.css" % version)
-                text = re.sub(r"<ver>[^<]*</ver>", "<ver>%s</ver>" % version, text)
+                text = re.sub(r"<ver>[^<]*</ver>", "<ver>%s</ver>" % smarthub_version(version), text)
                 data = text.encode("utf-8")
             if rel == "js/app.js":
                 rel = "js/app-%s.js" % version
             elif rel == "css/app.css":
                 rel = "css/app-%s.css" % version
             z.writestr(rel, data)
-    _widget["key"], _widget["zip"] = key, buf.getvalue()
-    return _widget["zip"]
+    _widget[v["id"]] = (key, buf.getvalue())
+    return buf.getvalue()
 
 
 def widget_list():
     origin = PUBLIC[:-3] if PUBLIC.endswith("/kp") else PUBLIC
-    return ('<?xml version="1.0" encoding="UTF-8"?>\n<rsp stat="ok">\n<list>\n'
-            '<widget id="KinoPub">\n<title>KinoPub</title>\n'
-            '<compression size="%d" type="zip"/>\n'
-            '<description>Kinopub for Samsung Orsay TVs</description>\n'
-            '<download>%s/Widget/KinoPub.zip</download>\n'
-            '</widget>\n</list>\n</rsp>\n') % (len(widget_zip()), origin)
+    items = "".join(
+        '<widget id="%s">\n<title>%s</title>\n<compression size="%d" type="zip"/>\n'
+        '<description>Kinopub for Samsung Orsay TVs</description>\n'
+        '<download>%s/Widget/%s.zip</download>\n</widget>\n'
+        % (v["id"], v["title"], len(widget_zip(v)), origin, v["id"]) for v in variants())
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<rsp stat="ok">\n<list>\n%s</list>\n</rsp>\n' % items
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -329,8 +371,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/widgetlist.xml":
                 return self.send_bytes(widget_list().encode(), "text/xml; charset=utf-8", head)
-            if p == "/Widget/KinoPub.zip":
-                return self.send_bytes(widget_zip(), "application/zip", head)
+            if p.startswith("/Widget/") and p.endswith(".zip"):
+                for v in variants():
+                    if p == "/Widget/%s.zip" % v["id"]:
+                        return self.send_bytes(widget_zip(v), "application/zip", head)
             if p == "/log":
                 # diagnostics sent by the TV app; the request line is the log entry
                 self.send_response(204)

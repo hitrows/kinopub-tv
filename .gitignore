@@ -5,3 +5,4 @@ LOCAL.md
 build/
 *.zip
 .claude/
+dist/
