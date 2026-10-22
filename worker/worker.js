@@ -9,6 +9,9 @@
 //   GET /auth/poll?code=            -> token JSON once the code is confirmed, else {error}
 //   GET /auth/refresh?rt=           -> refreshed token JSON
 //   GET /api/<path>?<query>         -> Kinopub /v1/<path>; URLs rewritten through this worker
+//                                      (?_post=1: sent as a form POST with the other params)
+//   GET /search?q=                  -> Kinopub search; a Latin query that finds little is
+//                                      retried with the Russian titles TMDB knows for it
 //   GET /s/<b64>/<name>             -> posters etc.; .m3u8 playlists are rewritten
 //   GET /hls/<b64 master>/<n>/index.m3u8  -> HLS with audio track n
 //   GET /srt/<b64>/subs.json        -> .srt as [[start, end, text], ...]
@@ -53,6 +56,7 @@ export default {
       if (p.startsWith("/s/")) return await relay(request, base, p, ctx);
       if (p.startsWith("/app/")) return await appFile(env, base, p.slice(5));
       if (p === "/recs") return await recs(request, env, base, ctx);
+      if (p === "/search") return await search(request, env, base);
       if (p === "/" || p === "/health") return json(200, { ok: true, service: "kp-orsay" });
       return json(404, { error: "not_found" });
     } catch (e) {
@@ -113,7 +117,14 @@ async function authRefresh(env, rt) {
 async function apiCall(request, env, base, path, search) {
   const tok = request.headers.get("X-KP-Token");
   if (!tok) return json(401, { error: "not_authorized" });
-  const r = await fetch(API + "/v1/" + path + search, { headers: { Authorization: "Bearer " + tok, "User-Agent": UA } });
+  const q = new URLSearchParams(search);
+  let r;
+  if (q.get("_post")) {
+    // the TV only sends GETs; writes (bookmarks, device settings) come as ?_post=1
+    q.delete("_post");
+    r = await fetch(API + "/v1/" + path, { method: "POST", body: q,
+      headers: { Authorization: "Bearer " + tok, "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded" } });
+  } else r = await fetch(API + "/v1/" + path + search, { headers: { Authorization: "Bearer " + tok, "User-Agent": UA } });
   let body;
   try { body = await r.json(); } catch (e) { return json(502, { error: "bad_api_response_" + r.status }); }
   if (isList(path)) body = slimList(body);
@@ -476,4 +487,36 @@ async function recs(request, env, base, ctx) {
   stored.headers.set("Cache-Control", "public, max-age=" + RECS_TTL);
   ctx.waitUntil(caches.default.put(cacheKey, stored));
   return resp;
+}
+
+/* ---------- search ---------- */
+
+// Kinopub knows a title by its Russian and original names. "Attack on Titan"
+// (English name of a Japanese show) finds nothing there, so a Latin query
+// that finds little is also looked up in TMDB and retried in Russian.
+async function search(request, env, base) {
+  const tok = request.headers.get("X-KP-Token");
+  if (!tok) return json(401, { error: "not_authorized" });
+  const q = (new URL(request.url).searchParams.get("q") || "").trim();
+  if (q.length < 2) return json(200, { items: [] });
+  const first = await kp(tok, "items/search?perpage=30&q=" + encodeURIComponent(q));
+  const items = ((first && first.items) || []).slice(0);
+  if (env.TMDB_TOKEN && /^[\x00-\x7f]+$/.test(q) && items.length < 5) {
+    // TMDB's /search/multi ranks oddly ("Spirited Away" -> documentaries about it):
+    // search films and series separately and take the most voted
+    const [mv, tv] = await Promise.all(["movie", "tv"].map((m) => tmdb(env, "/search/" + m + "?language=ru-RU&query=" + encodeURIComponent(q))));
+    const hits = [...((mv && mv.results) || []).slice(0, 5), ...((tv && tv.results) || []).slice(0, 5)]
+      .sort((a, b) => (b.vote_count || 0) - (a.vote_count || 0));
+    const names = [];
+    for (const r of hits) {
+      const name = r.title || r.name;
+      const plain = name && name.replace(/ё/g, "е").replace(/Ё/g, "Е"); // Kinopub often writes е for ё
+      if (plain && !names.includes(plain) && plain.toLowerCase() !== q.toLowerCase()) names.push(plain);
+      if (names.length >= 3) break;
+    }
+    const more = await Promise.all(names.map((n) => kp(tok, "items/search?perpage=10&q=" + encodeURIComponent(n))));
+    const have = new Set(items.map((i) => i.id));
+    for (const res of more) for (const it of (res && res.items) || []) if (!have.has(it.id)) { have.add(it.id); items.push(it); }
+  }
+  return json(200, rewrite({ items: items.map(slimItem) }, base));
 }

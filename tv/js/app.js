@@ -306,6 +306,10 @@ if (!CLOUD) {
 
 var COLS = 6, ROWS = 2, CW = 124, RH = 219, SH = 236;
 
+// Kinopub streams from Russia or the Netherlands; the choice is a setting of
+// this device on Kinopub (ids from device/info: 3 = Россия, 1 = Нидерланды).
+var SERVERS = [{ id: 3, title: 'Россия', cls: 'ru' }, { id: 1, title: 'Нидерланды', cls: 'nl' }];
+
 // Same rows as a Mac keyboard: digits on top, then ЙЦУКЕН / QWERTY.
 var KB = {
 	ru: [
@@ -335,7 +339,7 @@ var Home = {
 		UI.screen('home');
 		App.handler = Home;
 		Home.renderMenu();
-		if (!Home.inited) { Home.inited = true; Home.load(Home.sec); }
+		if (!Home.inited) { Home.inited = true; Home.load(Home.sec); Home.loadServer(); }
 		else Home.renderGrid();
 	},
 
@@ -362,7 +366,38 @@ var Home = {
 			var c = 'mi' + (i === Home.sec ? ' active' : '') + (Home.area === 'menu' && i === Home.sec ? ' focus' : '');
 			h += '<div id="mi' + i + '" class="' + c + '"><span class="ico" style="background-position:-' + (SECTIONS[i].icon * 16) + 'px 0"></span>' + esc(SECTIONS[i].title) + '</div>';
 		}
+		h += '<div class="srv">';
+		for (var j = 0; j < SERVERS.length; j++) {
+			var sv = SERVERS[j];
+			h += '<span id="srv' + sv.id + '" class="flag ' + sv.cls + (sv.id === Home.server ? ' sel' : '') +
+				(Home.area === 'servers' && j === Home.srvIdx ? ' focus' : '') + '"><i></i><i></i><i></i></span>';
+		}
+		var cur = Home.area === 'servers' ? SERVERS[Home.srvIdx] : Home.serverInfo();
+		h += '<div class="srv-label">' + (cur ? 'Сервер: ' + esc(cur.title) : '') + '</div></div>';
 		$('menu').innerHTML = h;
+	},
+
+	server: null, srvIdx: 0, deviceId: null,
+	serverInfo: function () {
+		for (var i = 0; i < SERVERS.length; i++) if (SERVERS[i].id === Home.server) return SERVERS[i];
+		return null;
+	},
+	loadServer: function () {
+		Net.api('device/info', function (r) {
+			var d = r.device || {}, list = (d.settings && d.settings.serverLocation && d.settings.serverLocation.value) || [];
+			Home.deviceId = d.id;
+			for (var i = 0; i < list.length; i++) if (list[i].selected) Home.server = list[i].id;
+			if (App.handler === Home) Home.renderMenu();
+		}, function () {});
+	},
+	pickServer: function (sv) {
+		if (!Home.deviceId) { UI.toast('Не удалось узнать устройство'); return; }
+		if (sv.id === Home.server) { UI.toast('Уже смотрим через: ' + sv.title); return; }
+		Net.api('device/' + Home.deviceId + '/settings?_post=1&serverLocation=' + sv.id, function () {
+			Home.server = sv.id;
+			Home.renderMenu();
+			UI.toast('Сервер: ' + sv.title + '. Заработает со следующего фильма');
+		});
 	},
 
 	// Walking through the menu only moves the highlight; a section loads once
@@ -488,18 +523,20 @@ var Home = {
 
 	doSearch: function () {
 		var id = ++Home.reqId;
-		$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#f5a623">|</span>';
+		$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#02b875">|</span>';
 		if (Home.query.length < 2) {
 			Home.items = []; Home.renderGrid();
 			$('gridEmpty').innerHTML = 'Набери название пультом';
 			return;
 		}
-		Net.api('items/search?perpage=30&q=' + encodeURIComponent(Home.query), function (r) {
+		var got = function (r) {
 			if (id !== Home.reqId) return;
 			Home.items = r.items || []; Home.idx = 0; Home.top = 0;
 			Home.page = 1; Home.pages = 1;
 			Home.renderGrid();
-		});
+		};
+		if (CLOUD) Net.get('/search?q=' + encodeURIComponent(Home.query), got);
+		else Net.api('items/search?perpage=30&q=' + encodeURIComponent(Home.query), got);
 	},
 
 	rows: function () { return SECTIONS[Home.sec].search ? 1 : ROWS; },
@@ -551,7 +588,7 @@ var Home = {
 		else if (kk.id === 'back') Home.query = Home.query.slice(0, -1);
 		else if (kk.id === 'clear') Home.query = '';
 		else if (kk.id === 'lang') { Home.lang = Home.lang === 'ru' ? 'en' : 'ru'; Home.renderKb(); }
-		$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#f5a623">|</span>';
+		$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#02b875">|</span>';
 		clearTimeout(Home.searchTimer);
 		Home.searchTimer = setTimeout(Home.doSearch, 700);
 	},
@@ -621,15 +658,35 @@ var Home = {
 		if (k === K.BLUE) { if (s.list !== undefined) Home.cycleSort(); return; }
 		if (Home.area === 'menu') {
 			// the menu wraps around: up from the top lands on Search, down from Search on the top
+			// ... → Поиск → server flags → Главная → ...
 			var n = SECTIONS.length;
-			if (k === K.UP) Home.browse((Home.sec + n - 1) % n);
-			else if (k === K.DOWN) Home.browse((Home.sec + 1) % n);
+			if ((k === K.UP && Home.sec === 0) || (k === K.DOWN && Home.sec === n - 1)) {
+				Home.area = 'servers';
+				Home.srvIdx = 0;
+				for (var si = 0; si < SERVERS.length; si++) if (SERVERS[si].id === Home.server) Home.srvIdx = si;
+				Home.renderMenu();
+			}
+			else if (k === K.UP) Home.browse(Home.sec - 1);
+			else if (k === K.DOWN) Home.browse(Home.sec + 1);
 			else if (k === K.RIGHT || k === K.ENTER) {
 				if (Home.loadTimer) { clearTimeout(Home.loadTimer); Home.loadTimer = null; Home.load(Home.sec); }
 				if (s.search) { Home.area = 'kb'; Home.renderKb(); }
 				else if (Home.items.length || (s.shelves && Shelf.rows.length)) { Home.area = 'grid'; Home.renderGrid(); }
 				Home.renderMenu();
 			}
+			return;
+		}
+		if (Home.area === 'servers') {
+			if (k === K.LEFT && Home.srvIdx > 0) Home.srvIdx--;
+			else if (k === K.RIGHT && Home.srvIdx < SERVERS.length - 1) Home.srvIdx++;
+			else if (k === K.ENTER) { Home.pickServer(SERVERS[Home.srvIdx]); return; }
+			else if (k === K.UP || k === K.DOWN) {
+				Home.area = 'menu';
+				Home.browse(k === K.UP ? SECTIONS.length - 1 : 0);
+				Home.renderMenu();
+				return;
+			}
+			Home.renderMenu();
 			return;
 		}
 		if (Home.area === 'kb') {
@@ -650,7 +707,7 @@ var Home = {
 					Home.query = Home.query.slice(0, -1);
 					clearTimeout(Home.searchTimer);
 					Home.searchTimer = setTimeout(Home.doSearch, 700);
-					$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#f5a623">|</span>';
+					$('searchQuery').innerHTML = esc(Home.query) + '<span style="color:#02b875">|</span>';
 				}
 			}
 			if (Home.area === 'kb') moveFocus(oKey, 'k' + Home.kbRow + '_' + Home.kbCol);
@@ -767,6 +824,7 @@ var Item = {
 			}
 			if (!prev) Item.pickStart();
 			Item.act = 0;
+			if (!prev) Item.checkToWatch(it.id);
 			Item.area = 'episodes';
 			Item.onTrailer = false;
 			Item.tabOff = 0;
@@ -806,7 +864,7 @@ var Item = {
 		if (it.imdb_rating) meta.push('IMDb ' + (+it.imdb_rating).toFixed(1));
 		$('itemMeta').innerHTML = esc(meta.join('  ·  '));
 		$('itemPlot').innerHTML = esc(it.plot);
-		$('qualityLabel').innerHTML = QUALITIES[Item.quality];
+		Item.renderHints();
 
 		var multi = Item.seasons.length > 1 || Item.seasons[0].number > 0;
 		var h = '';
@@ -937,6 +995,56 @@ var Item = {
 		return true;
 	},
 
+	// Red key: put the title into the "Посмотреть" bookmark folder, or take it out.
+	toWatch: null,      // {id, title} of that folder
+	inToWatch: null,    // is the open title in it (null until known)
+
+	toWatchFolder: function (done) {
+		if (Item.toWatch) return done(Item.toWatch);
+		Net.api('bookmarks', function (r) {
+			var f = r.items || [];
+			for (var i = 0; i < f.length; i++) if (String(f[i].title).toLowerCase() === 'посмотреть') { Item.toWatch = f[i]; return done(f[i]); }
+			Net.api('bookmarks/create?_post=1&title=' + encodeURIComponent('Посмотреть'), function (c) {
+				Item.toWatch = c.folder || (c.items && c.items[0]) || null;
+				if (Item.toWatch) done(Item.toWatch); else UI.toast('Не удалось создать папку «Посмотреть»');
+			});
+		});
+	},
+
+	checkToWatch: function (id) {
+		Item.inToWatch = null;
+		Item.toWatchFolder(function (folder) {
+			Net.api('bookmarks/get-item-folders?item=' + id, function (r) {
+				if (!Item.data || Item.data.id !== id) return;
+				var fs = r.folders || [];
+				Item.inToWatch = false;
+				for (var i = 0; i < fs.length; i++) if (fs[i].id === folder.id) Item.inToWatch = true;
+				Item.renderHints();
+			}, function () {});
+		});
+	},
+
+	toggleToWatch: function () {
+		var id = Item.data.id, adding = !Item.inToWatch;
+		Item.toWatchFolder(function (folder) {
+			Net.api('bookmarks/' + (adding ? 'add' : 'remove-item') + '?_post=1&item=' + id + '&folder=' + folder.id, function () {
+				Item.inToWatch = adding;
+				Item.renderHints();
+				UI.toast(adding ? 'Добавлено в «Посмотреть»' : 'Убрано из «Посмотреть»');
+				for (var k in Home.cache) if (SECTIONS[parseInt(k, 10)] && SECTIONS[parseInt(k, 10)].bookmarks) delete Home.cache[k];
+			});
+		});
+	},
+
+	renderHints: function () {
+		$('itemHints').innerHTML =
+			'<span class="k red"></span> ' + (Item.inToWatch ? 'убрать из «Посмотреть»' : 'в «Посмотреть»') +
+			'&nbsp;&nbsp;&nbsp;<span class="k green"></span> качество: ' + QUALITIES[Item.quality] +
+			'&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> просмотрено' +
+			(Item.trailerB64() ? '&nbsp;&nbsp;&nbsp;<span class="k blue"></span> трейлер' : '') +
+			'&nbsp;&nbsp;&nbsp;TOOLS — размер экрана';
+	},
+
 	toggleWatched: function () {
 		var ep = Item.current(), s = Item.seasons[Item.si];
 		var q = 'watching/toggle?id=' + Item.data.id + '&video=' + ep.number + (s.number ? '&season=' + s.number : '');
@@ -950,7 +1058,11 @@ var Item = {
 	key: function (k) {
 		var eps = Item.seasons[Item.si].eps;
 		if (k === K.RETURN) { Home.open(); return; }
+		// colour keys in remote order: red "Посмотреть", green quality, yellow watched, blue trailer
+		if (k === K.RED) { Item.toggleToWatch(); return; }
 		if (k === K.GREEN) { Item.quality = (Item.quality + 1) % QUALITIES.length; Item.render(); return; }
+		if (k === K.YELLOW) { Item.toggleWatched(); return; }
+		if (k === K.BLUE) { Item.playTrailer(); return; }
 		if (Item.area === 'seasons') {
 			if (Item.onTrailer && (k === K.ENTER || k === K.PLAY)) { Item.playTrailer(); return; }
 			if (k === K.LEFT) Item.moveTab(-1);
@@ -964,9 +1076,6 @@ var Item = {
 			if (k === K.UP && Item.act > 0) Item.act--;
 			else if (k === K.DOWN && Item.act < acts.length - 1) Item.act++;
 			else if (k === K.ENTER || k === K.PLAY) { if (acts[Item.act].trailer) Item.playTrailer(); else Item.play(acts[Item.act].fromStart); return; }
-			else if (k === K.BLUE) { Item.playTrailer(); return; }
-			else if (k === K.YELLOW) { Item.play(true); return; }
-			else if (k === K.RED) { Item.toggleWatched(); return; }
 			Item.render();
 			return;
 		}
@@ -978,9 +1087,6 @@ var Item = {
 		else if (k === K.CH_DOWN) Item.ei = Math.min(eps.length - 1, Item.ei + Item.VISIBLE);
 		else if (k === K.CH_UP) Item.ei = Math.max(0, Item.ei - Item.VISIBLE);
 		else if (k === K.ENTER || k === K.PLAY) { Item.play(); return; }
-		else if (k === K.YELLOW) { Item.play(true); return; }
-		else if (k === K.BLUE) { Item.playTrailer(); return; }
-		else if (k === K.RED) { Item.toggleWatched(); return; }
 		Item.scroll();
 		Item.render();
 	}
@@ -1400,7 +1506,7 @@ var MARKUP = [
 	'			<div id="seasons"></div>',
 	'			<div id="episodes"></div>',
 	'		</div>',
-	'		<div id="itemHints"><span class="k green"></span> качество: <span id="qualityLabel"></span>&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> с начала&nbsp;&nbsp;&nbsp;<span class="k red"></span> отметить просмотренным&nbsp;&nbsp;&nbsp;<span class="k blue"></span> трейлер&nbsp;&nbsp;&nbsp;TOOLS — размер экрана</div>',
+	'		<div id="itemHints"></div>',
 	'	</div>',
 	'',
 	'	<div id="loading">Загрузка…</div>',
