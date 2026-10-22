@@ -21,11 +21,11 @@ var K = tvKey ? {
 	PLAY: tvKey.KEY_PLAY, PAUSE: tvKey.KEY_PAUSE, STOP: tvKey.KEY_STOP,
 	FF: tvKey.KEY_FF, RW: tvKey.KEY_RW, RED: tvKey.KEY_RED, GREEN: tvKey.KEY_GREEN,
 	YELLOW: tvKey.KEY_YELLOW, BLUE: tvKey.KEY_BLUE,
-	CH_UP: tvKey.KEY_CH_UP, CH_DOWN: tvKey.KEY_CH_DOWN
+	CH_UP: tvKey.KEY_CH_UP, CH_DOWN: tvKey.KEY_CH_DOWN, TOOLS: tvKey.KEY_TOOLS
 } : {
 	LEFT: 37, RIGHT: 39, UP: 38, DOWN: 40, ENTER: 13, RETURN: 8, EXIT: 27,
 	PLAY: 80, PAUSE: 32, STOP: 83, FF: 190, RW: 188, RED: 82, GREEN: 71,
-	YELLOW: 89, BLUE: 66, CH_UP: 33, CH_DOWN: 34
+	YELLOW: 89, BLUE: 66, CH_UP: 33, CH_DOWN: 34, TOOLS: 84
 };
 
 function $(id) { return document.getElementById(id); }
@@ -47,6 +47,10 @@ function setClass(id, cls, on) {
 	if (on && !has) el.className += ' ' + cls;
 	else if (!on && has) el.className = (' ' + el.className + ' ').replace(' ' + cls + ' ', ' ').replace(/^\s+|\s+$/g, '');
 }
+// Images added after the TV installed the app aren't in its files: the cloud
+// build gets them from the Worker, which serves the repo's tv/img.
+function imgUrl(name) { return CLOUD && PROXY.charAt(0) !== '_' ? PROXY + '/app/img/' + name : 'img/' + name; }
+
 function moveFocus(from, to) { setClass(from, 'focus', false); setClass(to, 'focus', true); }
 
 /* ---------- storage (cloud build keeps the token on the TV) ---------- */
@@ -256,6 +260,7 @@ var SORTS = [{ id: '-created', title: 'новые' }, { id: '-views', title: 'п
 
 // "Главная": the shelves Kinopub's own front page shows.
 var SHELVES = [
+	{ title: 'Для тебя', recs: true },
 	{ title: 'Популярные фильмы', path: 'items/popular?type=movie' },
 	{ title: 'Новые фильмы', path: 'items/fresh?type=movie' },
 	{ title: 'Популярные сериалы', path: 'items/popular?type=serial' },
@@ -266,21 +271,29 @@ var SHELVES = [
 	{ title: 'Новые документальные', path: 'items/fresh?type=documovie' }
 ];
 
+// icon = position in img/menu-*.png
 var SECTIONS = [
-	{ title: 'Главная', shelves: true },
-	{ title: 'Новинки', list: '' },
-	{ title: 'Фильмы', list: 'type=movie' },
-	{ title: 'Сериалы', list: 'type=serial' },
-	{ title: 'Аниме', list: 'genre=25' },
-	{ title: 'Концерты', list: 'type=concert' },
-	{ title: 'Докуфильмы', list: 'type=documovie' },
-	{ title: 'Докусериалы', list: 'type=docuserial' },
-	{ title: 'ТВ-шоу', list: 'type=tvshow' },
-	{ title: 'Недосмотренное', watching: true, badge: 'new' },
-	{ title: 'История', history: true },
-	{ title: 'Закладки', bookmarks: true },
-	{ title: 'Поиск', search: true }
+	{ title: 'Главная', shelves: true, icon: 0 },
+	{ title: 'Для тебя', recs: true, icon: 13 },
+	{ title: 'Новинки', list: '', icon: 1 },
+	{ title: 'Фильмы', list: 'type=movie', icon: 2 },
+	{ title: 'Сериалы', list: 'type=serial', icon: 3 },
+	{ title: 'Аниме', list: 'genre=25', icon: 4 },
+	{ title: 'Концерты', list: 'type=concert', icon: 5 },
+	{ title: 'Докуфильмы', list: 'type=documovie', icon: 6 },
+	{ title: 'Докусериалы', list: 'type=docuserial', icon: 7 },
+	{ title: 'ТВ-шоу', list: 'type=tvshow', icon: 8 },
+	{ title: 'Недосмотренное', watching: true, badge: 'new', icon: 9 },
+	{ title: 'История', history: true, icon: 10 },
+	{ title: 'Закладки', bookmarks: true, icon: 11 },
+	{ title: 'Поиск', search: true, icon: 12 }
 ];
+
+// Recommendations come from the cloud Worker (TMDB); the local proxy has none.
+if (!CLOUD) {
+	for (var si = SECTIONS.length - 1; si >= 0; si--) if (SECTIONS[si].recs) SECTIONS.splice(si, 1);
+	for (var sj = SHELVES.length - 1; sj >= 0; sj--) if (SHELVES[sj].recs) SHELVES.splice(sj, 1);
+}
 
 var COLS = 6, ROWS = 2, CW = 124, RH = 219, SH = 236;
 
@@ -322,8 +335,15 @@ var Home = {
 	renderTitle: function () {
 		var s = SECTIONS[Home.sec];
 		var h = esc(s.title) + (Home.folder ? ' · ' + esc(Home.folder.title) : '');
-		if (s.list !== undefined) h += '<span class="hint"><span class="k yellow"></span> ' + SORTS[Home.sortIdx()].title + '</span>';
 		if (Home.folder) h += '<span class="hint">RETURN — к папкам</span>';
+		else {
+			var legend = '<span class="k red"></span> поиск <span class="k green"></span> новинки' +
+				(Home.find('recs') >= 0 ? ' <span class="k yellow"></span> для тебя' : '');
+			if (s.list !== undefined) legend += ' <span class="k blue"></span> ' + SORTS[Home.sortIdx()].title;
+			// attribution required by TMDB's terms
+			if (s.recs) legend = 'рекомендации <img class="tmdb" src="' + imgUrl('tmdb.png') + '" alt="TMDB" /> &nbsp; ' + legend;
+			h += '<span class="hint">' + legend + '</span>';
+		}
 		$('sectionTitle').innerHTML = h;
 	},
 
@@ -331,7 +351,7 @@ var Home = {
 		var h = '<div class="logo"><img src="img/logo-24.png" alt="" />kinopub <span class="ver">v' + VERSION + (CLOUD ? '' : 'L') + '</span></div>';
 		for (var i = 0; i < SECTIONS.length; i++) {
 			var c = 'mi' + (i === Home.sec ? ' active' : '') + (Home.area === 'menu' && i === Home.sec ? ' focus' : '');
-			h += '<div id="mi' + i + '" class="' + c + '"><span class="ico" style="background-position:-' + (i * 16) + 'px 0"></span>' + esc(SECTIONS[i].title) + '</div>';
+			h += '<div id="mi' + i + '" class="' + c + '"><span class="ico" style="background-position:-' + (SECTIONS[i].icon * 16) + 'px 0"></span>' + esc(SECTIONS[i].title) + '</div>';
 		}
 		$('menu').innerHTML = h;
 	},
@@ -415,6 +435,8 @@ var Home = {
 				}
 				return out;
 			} };
+		if (s.recs)
+			return { raw: '/recs', parse: function (r) { return r.items || []; } };
 		if (s.bookmarks && Home.folder)
 			return { path: 'bookmarks/' + Home.folder.id + '?perpage=30&page=' + page, parse: function (r) { return r.items || []; } };
 		if (s.bookmarks)
@@ -451,7 +473,8 @@ var Home = {
 			return;
 		}
 		var req = Home.request(Home.page + 1);
-		Net.api(req.path, function (r) { done(req.parse(r), r.pagination || null); }, fail);
+		var got = function (r) { done(req.parse(r), r.pagination || null); };
+		if (req.raw) Net.get(req.raw, got, fail); else Net.api(req.path, got, fail);
 	},
 
 	doSearch: function () {
@@ -563,8 +586,30 @@ var Home = {
 		else Home.renderGrid();
 	},
 
+	// Index of the first section with the given flag, e.g. 'search'.
+	find: function (flag) {
+		for (var i = 0; i < SECTIONS.length; i++) if (SECTIONS[i][flag] !== undefined) return i;
+		return -1;
+	},
+
+	// Colour keys jump to Search / New / For you from anywhere on the home screen.
+	jump: function (flag) {
+		var to = Home.find(flag);
+		if (to < 0) return;
+		clearTimeout(Home.loadTimer); Home.loadTimer = null;
+		Home.area = SECTIONS[to].search ? 'kb' : 'grid';
+		if (to !== Home.sec || Home.folder) Home.load(to);
+		Home.renderMenu();
+		Home.renderGrid();
+		if (SECTIONS[to].search) Home.renderKb();
+	},
+
 	key: function (k) {
 		var s = SECTIONS[Home.sec];
+		if (k === K.RED) { if (!s.search) Home.jump('search'); return; }
+		if (k === K.GREEN) { Home.jump('list'); return; }
+		if (k === K.YELLOW) { Home.jump('recs'); return; }
+		if (k === K.BLUE) { if (s.list !== undefined) Home.cycleSort(); return; }
 		if (Home.area === 'menu') {
 			// the menu wraps around: up from the top lands on Search, down from Search on the top
 			var n = SECTIONS.length;
@@ -576,7 +621,6 @@ var Home = {
 				else if (Home.items.length || (s.shelves && Shelf.rows.length)) { Home.area = 'grid'; Home.renderGrid(); }
 				Home.renderMenu();
 			}
-			else if (k === K.YELLOW && s.list !== undefined) Home.cycleSort();
 			return;
 		}
 		if (Home.area === 'kb') {
@@ -605,7 +649,6 @@ var Home = {
 			return;
 		}
 		if (s.shelves) { Shelf.key(k); return; }
-		if (k === K.YELLOW && s.list !== undefined) { Home.cycleSort(); return; }
 		if (k === K.RETURN && Home.folder) { Home.folder = null; Home.load(Home.sec); Home.area = 'grid'; return; }
 		// grid
 		if (k === K.LEFT) Home.moveGrid(-1);
@@ -644,15 +687,17 @@ var Shelf = {
 		for (var i = 0; i < SHELVES.length; i++) {
 			var row = { title: SHELVES[i].title, items: [], idx: 0, off: 0 };
 			Shelf.rows.push(row);
-			(function (row, path) {
-				Net.api(path + '&perpage=24', function (r) {
+			(function (row, sh) {
+				var got = function (r) {
 					if (id !== Home.reqId) return;
 					UI.loading(false);
 					row.items = r.items || [];
 					Home.remember();
 					Shelf.render();
-				}, function () {});
-			})(row, SHELVES[i].path);
+				};
+				if (sh.recs) Net.get('/recs', got, function () {});
+				else Net.api(sh.path + '&perpage=24', got, function () {});
+			})(row, SHELVES[i]);
 		}
 	},
 
@@ -1290,7 +1335,7 @@ var MARKUP = [
 	'			<div id="seasons"></div>',
 	'			<div id="episodes"></div>',
 	'		</div>',
-	'		<div id="itemHints"><span class="k green"></span> качество: <span id="qualityLabel"></span>&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> с начала&nbsp;&nbsp;&nbsp;<span class="k red"></span> отметить просмотренным&nbsp;&nbsp;&nbsp;<span class="k blue"></span> размер экрана</div>',
+	'		<div id="itemHints"><span class="k green"></span> качество: <span id="qualityLabel"></span>&nbsp;&nbsp;&nbsp;<span class="k yellow"></span> с начала&nbsp;&nbsp;&nbsp;<span class="k red"></span> отметить просмотренным&nbsp;&nbsp;&nbsp;TOOLS — размер экрана</div>',
 	'	</div>',
 	'',
 	'	<div id="loading">Загрузка…</div>',
@@ -1353,7 +1398,7 @@ var App = {
 			return; // let the TV close the app
 		}
 		if (!tvKey && k === 8 && e.preventDefault) e.preventDefault();
-		if (k === K.BLUE && !Player.active) { Screen.cycle(); return; }
+		if (k === K.TOOLS && !Player.active) { Screen.cycle(); return; }
 		if (App.handler && App.handler.key) App.handler.key(k);
 	}
 };

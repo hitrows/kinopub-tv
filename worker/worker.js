@@ -12,6 +12,8 @@
 //   GET /s/<b64>/<name>             -> posters etc.; .m3u8 playlists are rewritten
 //   GET /hls/<b64 master>/<n>/index.m3u8  -> HLS with audio track n
 //   GET /srt/<b64>/subs.json        -> .srt as [[start, end, text], ...]
+//   GET /recs                       -> {items}: TMDB recommendations for the viewing history,
+//                                      only titles Kinopub has (needs TMDB_TOKEN secret)
 //   GET /app/manifest.json          -> {version, js, css} of the newest TV app
 //   GET /app/js/..., /app/css/..., /app/img/...
 //                                   -> the TV app's files from GitHub (repo APP_REPO,
@@ -50,6 +52,7 @@ export default {
       if (p.startsWith("/srt/")) return await srt(p);
       if (p.startsWith("/s/")) return await relay(request, base, p, ctx);
       if (p.startsWith("/app/")) return await appFile(env, base, p.slice(5));
+      if (p === "/recs") return await recs(request, env, base, ctx);
       if (p === "/" || p === "/health") return json(200, { ok: true, service: "kp-orsay" });
       return json(404, { error: "not_found" });
     } catch (e) {
@@ -313,4 +316,115 @@ async function appFile(env, base, path) {
     return new Response(r.body, { headers: { ...code, "Content-Type": "image/png" } });
   }
   return json(404, { error: "not_found" });
+}
+
+/* ---------- recommendations (TMDB) ---------- */
+
+// Seeds: the last titles from Kinopub's history. TMDB finds each by its IMDb
+// id and recommends; titles recommended by several seeds rank higher. Each
+// candidate is looked up in Kinopub by title and year, so everything shown
+// can be played. Free Workers allow 50 subrequests: 1 history + 2 x 8 seeds
+// + 24 lookups stays under it. Results are cached per user for 6 hours.
+const SEEDS = 8, CANDIDATES = 24, RECS_TTL = 6 * 3600;
+// History's "time" is where playback stopped and "counter" how many episodes
+// or views there were: a title opened for a moment says nothing about taste,
+// a series binged for a dozen episodes says a lot.
+const MIN_POSITION = 600;
+const seedWeight = (h) => Math.min(1 + (h.counter || 0) / 3, 4);
+const TV_TYPES = ["serial", "docuserial", "tvshow"];
+
+async function tmdb(env, path) {
+  const r = await fetch("https://api.themoviedb.org/3" + path, {
+    headers: { Authorization: "Bearer " + env.TMDB_TOKEN, Accept: "application/json" },
+    cf: { cacheTtl: 86400, cacheEverything: true },
+  });
+  return r.ok ? r.json() : null;
+}
+
+async function kp(tok, path) {
+  const r = await fetch(API + "/v1/" + path, { headers: { Authorization: "Bearer " + tok, "User-Agent": UA } });
+  if (r.status === 401) { const e = new Error("not_authorized"); e.status = 401; throw e; }
+  return r.ok ? r.json() : null;
+}
+
+async function sha(text) {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const norm = (t) => String(t || "").toLowerCase().replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/g, "");
+
+async function recs(request, env, base, ctx) {
+  const tok = request.headers.get("X-KP-Token");
+  if (!tok) return json(401, { error: "not_authorized" });
+  if (!env.TMDB_TOKEN) return json(200, { items: [], error: "no_tmdb_token" });
+
+  const cacheKey = new Request("https://kp-orsay.cache/recs/v3/" + (await sha(tok)));
+  const hit = await caches.default.match(cacheKey);
+  if (hit) return hit;
+
+  const hist = await kp(tok, "history?perpage=50");
+  const seen = new Set(), strong = [], weak = [];
+  for (const h of (hist && hist.history) || []) {
+    const it = h.item;
+    if (!it || seen.has(it.id)) continue;
+    seen.add(it.id);
+    if (!it.imdb) continue;
+    const s = { item: it, weight: seedWeight(h) };
+    if ((h.time || 0) >= MIN_POSITION || (h.counter || 0) >= 2) { if (strong.length < 20) strong.push(s); }
+    else weak.push(s);
+  }
+  // the most watched of the 20 most recent; little real watching yet: take what was opened
+  const seeds = strong.sort((a, b) => b.weight - a.weight).slice(0, SEEDS);
+  while (seeds.length < 3 && weak.length) seeds.push(weak.shift());
+
+  // TMDB: imdb id -> tmdb id -> recommendations
+  const scores = new Map();
+  await Promise.all(seeds.map(async ({ item: seed, weight }) => {
+    const imdb = "tt" + String(seed.imdb).padStart(7, "0");
+    const found = await tmdb(env, "/find/" + imdb + "?external_source=imdb_id");
+    if (!found) return;
+    const wantTv = TV_TYPES.includes(seed.type);
+    const hit = (wantTv ? found.tv_results : found.movie_results)[0] || found.movie_results[0] || found.tv_results[0];
+    if (!hit) return;
+    const media = found.tv_results.includes(hit) ? "tv" : "movie";
+    const rec = await tmdb(env, "/" + media + "/" + hit.id + "/recommendations?language=ru-RU&page=1");
+    ((rec && rec.results) || []).forEach((r, rank) => {
+      const key = media + r.id;
+      const c = scores.get(key) || {
+        media, title: r.title || r.name, original: r.original_title || r.original_name,
+        year: parseInt((r.release_date || r.first_air_date || "").slice(0, 4), 10) || 0, score: 0,
+      };
+      c.score += weight * (1 + (20 - rank) / 20) + Math.min(r.vote_average || 0, 10) / 50;
+      scores.set(key, c);
+    });
+  }));
+
+  // back to Kinopub
+  const top = [...scores.values()].sort((a, b) => b.score - a.score).slice(0, CANDIDATES);
+  const found = await Promise.all(top.map(async (c) => {
+    const res = await kp(tok, "items/search?perpage=5&q=" + encodeURIComponent(c.title));
+    const want = [norm(c.title), norm(c.original)];
+    for (const it of (res && res.items) || []) {
+      const isTv = TV_TYPES.includes(it.type);
+      if (isTv !== (c.media === "tv")) continue;
+      if (c.year && it.year && Math.abs(it.year - c.year) > 1) continue;
+      const names = String(it.title).split(" / ").map(norm);
+      if (names.some((n) => want.includes(n))) return it;
+    }
+    return null;
+  }));
+
+  const out = [], used = new Set();
+  for (const it of found) {
+    if (!it || seen.has(it.id) || used.has(it.id)) continue;
+    used.add(it.id);
+    out.push(slimItem(it));
+  }
+  const resp = json(200, rewrite({ items: out }, base), { "Cache-Control": "private, max-age=" + RECS_TTL });
+  // the shared cache keeps it for 6 hours; a TV-side 304 isn't needed
+  const stored = new Response(resp.clone().body, resp);
+  stored.headers.set("Cache-Control", "public, max-age=" + RECS_TTL);
+  ctx.waitUntil(caches.default.put(cacheKey, stored));
+  return resp;
 }

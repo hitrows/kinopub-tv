@@ -4,6 +4,8 @@
 #   CLOUDFLARE_API_TOKEN=...  (template "Edit Cloudflare Workers")
 #   CLOUDFLARE_ACCOUNT_ID=...
 #   WORKER_NAME=kp-orsay      (optional)
+#   TMDB_TOKEN=...            (optional: TMDB "API Read Access Token", stored as a
+#                              Worker secret for recommendations; set once)
 #
 # Prints the plain-HTTP URL to give the TV (KP_CLOUD_URL for proxy.py).
 set -e
@@ -16,10 +18,15 @@ AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
 ok() { python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("success") else (print(json.dumps(d.get("errors")), file=sys.stderr) or 1))'; }
 
 curl -s -X PUT "$API/scripts/$NAME" -H "$AUTH" \
-	-F 'metadata={"main_module":"worker.js","compatibility_date":"2026-10-01"};type=application/json' \
+	-F 'metadata={"main_module":"worker.js","compatibility_date":"2026-10-01","keep_bindings":["secret_text"]};type=application/json' \
 	-F "worker.js=@worker.js;type=application/javascript+module" | ok
 curl -s -X POST "$API/scripts/$NAME/subdomain" -H "$AUTH" -H "Content-Type: application/json" \
 	-d '{"enabled":true,"previews_enabled":false}' | ok
+
+if [ -n "$TMDB_TOKEN" ]; then
+	python3 -c 'import json,os; print(json.dumps({"name": "TMDB_TOKEN", "text": os.environ["TMDB_TOKEN"], "type": "secret_text"}))' |
+		curl -s -X PUT "$API/scripts/$NAME/secrets" -H "$AUTH" -H "Content-Type: application/json" --data-binary @- | ok
+fi
 
 SUB=$(curl -s "$API/subdomain" -H "$AUTH" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("result") or {}).get("subdomain") or "")')
 [ -n "$SUB" ] || { echo "this account has no workers.dev subdomain yet: create one in the dashboard (Workers & Pages) or PUT $API/subdomain"; exit 1; }
