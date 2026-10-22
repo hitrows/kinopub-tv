@@ -17,6 +17,6 @@ LAST=$(cat VERSION 2>/dev/null || echo 0.0)
 V=${1:-$(echo "$LAST" | awk -F. '{ printf "%d.%d", $1, $2 + 1 }')}
 echo "$V" > VERSION
 
-rsync -a --delete --exclude .DS_Store tv proxy VERSION "$DEPLOY_HOST:$DEPLOY_DIR/"
+rsync -a --delete --exclude .DS_Store tv proxy apple VERSION "$DEPLOY_HOST:$DEPLOY_DIR/"
 ssh "$DEPLOY_HOST" "$DEPLOY_RESTART" >/dev/null 2>&1
 echo "deployed v$V to $DEPLOY_HOST:$DEPLOY_DIR"

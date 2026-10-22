@@ -1,0 +1,38 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>KP Apple</title>
+<link rel="stylesheet" type="text/css" href="css/app.css" />
+<script type="text/javascript" src="$MANAGER_WIDGET/Common/API/Widget.js"></script>
+<script type="text/javascript" src="$MANAGER_WIDGET/Common/API/TVKeyValue.js"></script>
+<script type="text/javascript" src="js/data.js"></script>
+<script type="text/javascript" src="js/app.js"></script>
+</head>
+<body onload="App.init();">
+<a href="javascript:void(0);" id="anchor" onkeydown="App.onKey(event);"></a>
+
+<div id="home" class="page">
+	<div class="bg"><img id="bg0" src="" alt="" /><img id="bg1" src="" alt="" /></div>
+	<div class="scrim-l"></div><div class="scrim-b"></div>
+	<div id="column"></div>
+	<div id="tabs"></div>
+</div>
+
+<div id="detail" class="page">
+	<div class="bg"><img id="dbg" class="on" src="" alt="" /></div>
+	<div class="scrim-l"></div><div class="scrim-b"></div>
+	<div class="info" id="dInfo">
+		<div class="big-title" id="dTitle"></div>
+		<div class="orig" id="dOrig"></div>
+		<div class="meta" id="dMeta"></div>
+		<div class="ratings" id="dRatings"></div>
+		<div class="plot" id="dPlot"></div>
+		<div class="buttons"><span class="btn primary" id="db0"></span><span class="btn" id="db1">Трейлер</span><span class="btn round" id="db2">+</span></div>
+	</div>
+	<div id="more"></div>
+</div>
+
+<div id="toast"></div>
+</body>
+</html>

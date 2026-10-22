@@ -6,3 +6,5 @@ build/
 *.zip
 .claude/
 dist/
+apple/img/art/
+apple/js/data.js

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget>
+	<previewjspath/>
+	<type>user</type>
+	<cpname>kinopub-tv</cpname>
+	<cpauthjs/>
+	<ThumbIcon>img/icon_106.png</ThumbIcon>
+	<BigThumbIcon>img/icon_115.png</BigThumbIcon>
+	<ListIcon>img/icon_85.png</ListIcon>
+	<BigListIcon>img/icon_95.png</BigListIcon>
+	<category>video</category>
+	<autoUpdate>n</autoUpdate>
+	<ver>1.001</ver>
+	<mgrver/>
+	<fullwidget>y</fullwidget>
+	<srcctl>y</srcctl>
+	<ticker>n</ticker>
+	<childlock>n</childlock>
+	<audiomute>n</audiomute>
+	<videomute>n</videomute>
+	<dcont>y</dcont>
+	<network>y</network>
+	<mouse>n</mouse>
+	<movie>y</movie>
+	<widgetname>KP Apple</widgetname>
+	<description>Kinopub design study in the style of Apple TV</description>
+	<width>960</width>
+	<height>540</height>
+	<author>
+		<name>kinopub-tv</name>
+		<email/>
+		<link/>
+		<organization/>
+	</author>
+</widget>

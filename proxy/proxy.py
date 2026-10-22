@@ -16,6 +16,7 @@ Standard library only. Configuration (environment):
               to a Cloudflare Worker (worker/) at this URL instead of this proxy
   KP_LOCAL    set to 0 to offer only the cloud build: then this proxy is needed
               only while the TV installs the app
+  KP_APPLE_DIR  optional: also offer "KP Apple", the design study in ../apple
   KP_LOCAL_ROOT  optional: build "KP Local" from another checkout (a folder with
               tv/ and VERSION), e.g. to keep it on an older release while the
               cloud build moves on
@@ -267,6 +268,7 @@ _widget = {}
 
 CLOUD_URL = os.environ.get("KP_CLOUD_URL", "").rstrip("/")
 LOCAL_ROOT = os.environ.get("KP_LOCAL_ROOT", "")
+APPLE_DIR = os.environ.get("KP_APPLE_DIR", "")
 LOCAL = os.environ.get("KP_LOCAL", "1") != "0" or not CLOUD_URL
 
 
@@ -285,6 +287,9 @@ def variants():
         if LOCAL_ROOT:
             local["root"] = LOCAL_ROOT
         out.append(local)
+    if APPLE_DIR:
+        out.append({"id": "KPApple", "title": "KP Apple", "proxy": CLOUD_URL or PUBLIC, "cloud": "1",
+                    "tv": APPLE_DIR, "version": "0.1"})
     return out
 
 
@@ -318,8 +323,8 @@ def widget_zip(v):
     are renamed per version (app-<version>.js).
     """
     root = v.get("root")
-    tv_dir = os.path.join(root, "tv") if root else TV_DIR
-    version = app_version(root) if root else app_version()
+    tv_dir = v.get("tv") or (os.path.join(root, "tv") if root else TV_DIR)
+    version = v.get("version") or (app_version(root) if root else app_version())
     files = []
     for base, _, names in os.walk(tv_dir):
         for n in sorted(names):
