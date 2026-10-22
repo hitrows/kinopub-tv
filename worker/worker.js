@@ -57,7 +57,7 @@ export default {
       if (p.startsWith("/api/")) return await apiCall(request, env, base, p.slice(5), url.search);
       if (p.startsWith("/hls/")) return await hls(base, p);
       if (p.startsWith("/srt/")) return await srt(p);
-      if (p.startsWith("/s/")) return await relay(request, base, p, ctx);
+      if (p.startsWith("/s/")) return await relay(request, base, p);
       if (p.startsWith("/app/")) return await appFile(env, base, p.slice(5));
       if (p === "/recs") return await recs(request, env, base, ctx);
       if (p === "/search") return await search(request, env, base);
@@ -245,7 +245,7 @@ async function hls(base, p) {
   return playlistResponse(rewriteM3u8(v.text, v.final, base));
 }
 
-async function relay(request, base, p, ctx) {
+async function relay(request, base, p) {
   const url = remote(p.split("/")[2]);
   if (/\.m3u8($|\?)/.test(p) || /\.m3u8($|\?)/.test(url)) {
     const r = await fetchText(url);
@@ -556,8 +556,9 @@ async function history(tok, ctx) {
 // A series' item carries every format, audio track and subtitle of every
 // episode: The Simpsons is 4 MB, seconds of parsing on a 2013 TV. The page
 // gets only what it shows; one episode's media comes from /media on play.
-async function fullItem(tok, id, ctx, fresh) {
-  const key = "item/" + (await sha(tok)) + "/" + id;
+// srv: the device's server choice; media links differ per server, so it's part of the key
+async function fullItem(tok, id, ctx, fresh, srv) {
+  const key = "item/" + (await sha(tok)) + "/" + id + "/" + (srv || 0);
   if (fresh) {
     const res = await kp(tok, "items/" + id);
     if (res && res.item) ctx.waitUntil(caches.default.put(new Request("https://kp-orsay.cache/" + key),
@@ -572,8 +573,9 @@ const slimVideo = (v) => ({ id: v.id, number: v.number, title: v.title, duration
 async function itemPage(request, base, ctx) {
   const tok = request.headers.get("X-KP-Token");
   if (!tok) return json(401, { error: "not_authorized" });
-  const id = parseInt(new URL(request.url).searchParams.get("id"), 10);
-  const res = await fullItem(tok, id, ctx, true); // always fresh: watching positions change
+  const q = new URL(request.url).searchParams;
+  const id = parseInt(q.get("id"), 10);
+  const res = await fullItem(tok, id, ctx, true, q.get("srv")); // always fresh: watching positions change
   if (!res || !res.item) return json(404, { error: "not_found" });
   const it = res.item, out = {};
   for (const k of ["id", "type", "title", "year", "countries", "genres", "plot", "kinopoisk_rating", "imdb_rating", "posters", "trailer"]) out[k] = it[k];
@@ -588,7 +590,7 @@ async function media(request, base, ctx) {
   if (!tok) return json(401, { error: "not_authorized" });
   const q = new URL(request.url).searchParams;
   const id = parseInt(q.get("id"), 10), mid = parseInt(q.get("mid"), 10);
-  const res = await fullItem(tok, id, ctx, false);
+  const res = await fullItem(tok, id, ctx, false, q.get("srv"));
   const it = res && res.item;
   let v = null;
   for (const s of (it && it.seasons) || []) for (const e of s.episodes || []) if (e.id === mid) v = e;

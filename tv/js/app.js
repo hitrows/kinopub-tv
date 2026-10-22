@@ -425,6 +425,7 @@ var Home = {
 		var ttl = s.history ? 60000 : 300000;
 		if (+new Date() - c.ts > ttl) return false;
 		Home.sec = sec; Home.folder = null; Home.seen = {};
+		if (c.items) for (var si2 = 0; si2 < c.items.length; si2++) Home.seen[c.items[si2].id] = true; // History pages after it
 		Home.reqId++; Home.loadingMore = false; UI.loading(false);
 		Home.renderTitle();
 		$('home').className = 'screen';
@@ -824,7 +825,8 @@ var Shelf = {
 		var h = '', focus = Home.area === 'grid';
 		for (var r = Shelf.top; r < Shelf.rows.length && r < Shelf.top + 2; r++) {
 			var row = Shelf.rows[r], y = (r - Shelf.top) * SH;
-			h += '<div id="st' + r + '" class="shelf-t' + (focus && r === Shelf.si ? ' active' : '') + '" style="top:' + y + 'px">' + esc(row.title) + '</div>';
+			var credit = row.def && row.def.mix ? ' <img class="tmdb" src="' + imgUrl('tmdb.png') + '" alt="TMDB" />' : ''; // TMDB's terms
+			h += '<div id="st' + r + '" class="shelf-t' + (focus && r === Shelf.si ? ' active' : '') + '" style="top:' + y + 'px">' + esc(row.title) + credit + '</div>';
 			for (var i = row.off; i < row.items.length && i < row.off + COLS; i++)
 				h += cardHtml('s' + r + '_' + i, row.items[i], focus && r === Shelf.si && i === row.idx, (i - row.off) * CW, y + 28, row.def && row.def.badge);
 		}
@@ -865,7 +867,7 @@ var Item = {
 	open: function (id, keepPos, autoplay) {
 		UI.loading(true);
 		// the cloud build gets a page without per-episode media (a long series is megabytes otherwise)
-		var load = CLOUD ? function (ok) { Net.get('/item?id=' + id, ok); } : function (ok) { Net.api('items/' + id, ok); };
+		var load = CLOUD ? function (ok) { Net.get('/item?id=' + id + '&srv=' + (Home.server || 0), ok); } : function (ok) { Net.api('items/' + id, ok); };
 		load(function (r) {
 			UI.loading(false);
 			var it = r.item;
@@ -1030,7 +1032,7 @@ var Item = {
 		var ep = Item.current();
 		if (CLOUD && !ep.files) {
 			UI.loading(true);
-			Net.get('/media?id=' + Item.data.id + '&mid=' + ep.id, function (m) {
+			Net.get('/media?id=' + Item.data.id + '&mid=' + ep.id + '&srv=' + (Home.server || 0), function (m) {
 				UI.loading(false);
 				ep.files = m.files; ep.audios = m.audios; ep.subtitles = m.subtitles;
 				Item.play(fromStart);
@@ -1083,7 +1085,24 @@ var Item = {
 	},
 
 	// Called by the player when an episode finishes.
-	next: function () { return Item.step(1); },
+	// Keep the page's progress in step with the player, so coming back needs no reload.
+	markLocal: function (season, video, time, dur) {
+		for (var s = 0; s < Item.seasons.length; s++) {
+			if ((Item.seasons[s].number || null) !== (season || null)) continue;
+			var eps = Item.seasons[s].eps;
+			for (var e = 0; e < eps.length; e++) if (eps[e].number === video)
+				eps[e].watching = (dur && time >= dur - 60) ? { status: 1, time: 0 } : { status: 0, time: Math.floor(time) };
+		}
+	},
+
+	// Back from the player: the page is still here, just redraw it.
+	back: function (id) {
+		if (!Item.data || Item.data.id !== id) { Item.open(id, true); return; }
+		UI.screen('item');
+		App.handler = Item;
+		Item.act = 0;
+		Item.render();
+	},
 
 	// Red key: put the title into the "Посмотреть" bookmark folder, or take it out.
 	toWatch: null,      // {id, title} of that folder
@@ -1141,6 +1160,7 @@ var Item = {
 		Net.api(q, function () {
 			var st = ep.watching ? ep.watching.status : ep.watched;
 			ep.watching = { status: st === 1 ? -1 : 1, time: 0 };
+			Shelf.staleContinue();
 			Item.render();
 		});
 	},
@@ -1322,11 +1342,12 @@ var Player = {
 		document.body.className = '';
 		Player.hideOsd();
 		Player.bufferingUi(false);
-		Item.open(Player.v.id, true);
+		Item.back(Player.v.id);
 	},
 
 	save: function () {
 		var v = Player.v;
+		if (v && !v.trailer && Player.time >= 5) Item.markLocal(v.season, v.video, Player.time, Player.duration);
 		if (!v || v.trailer || Player.time < 5 || Math.abs(Player.time - Player.lastSaved) < 3) return;
 		Player.lastSaved = Player.time;
 		Net.api('watching/marktime?id=' + v.id + '&video=' + v.video + (v.season ? '&season=' + v.season : '') + '&time=' + Math.floor(Player.time), function () {}, function () {});
