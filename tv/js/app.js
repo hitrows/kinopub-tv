@@ -855,6 +855,42 @@ var Shelf = {
 	}
 };
 
+/* ---------- what was played last, per title: episode and audio track ---------- */
+
+var Recall = {
+	KEEP: 100,
+
+	get: function (id) { var all = Store.get('recall'); return all && all[id] || null; },
+
+	set: function (id, patch) {
+		var all = Store.get('recall') || {}, r = all[id] || {}, k;
+		for (k in patch) r[k] = patch[k];
+		r.t = +new Date();
+		all[id] = r;
+		var ids = [];
+		for (k in all) ids.push(k);
+		if (ids.length > Recall.KEEP) {
+			ids.sort(function (a, b) { return all[b].t - all[a].t; });
+			for (var i = Recall.KEEP; i < ids.length; i++) delete all[ids[i]];
+		}
+		Store.set('recall', all);
+	},
+
+	// An audio track as it reads in the menu: the same dub has a different index per episode.
+	audioKey: function (a) {
+		return [a.type && a.type.title || '', a.author && a.author.title || '', a.lang || ''].join('|');
+	},
+
+	// Index of the remembered dub among this episode's tracks: exact match, then same author.
+	audioIndex: function (audios, key) {
+		if (!key) return -1;
+		var author = key.split('|')[1], i;
+		for (i = 0; i < audios.length; i++) if (Recall.audioKey(audios[i]) === key) return i;
+		if (author) for (i = 0; i < audios.length; i++) if (audios[i].author && audios[i].author.title === author) return i;
+		return -1;
+	}
+};
+
 /* ---------- item page: seasons + episodes ---------- */
 
 var QUALITIES = ['1080p', '720p', '480p'];
@@ -893,17 +929,31 @@ var Item = {
 		});
 	},
 
-	// Land on the first episode that isn't finished.
+	// Land on the episode played last on this TV (the next one if it's finished);
+	// otherwise the furthest one started, or the first one.
 	pickStart: function () {
 		Item.si = 0; Item.ei = 0; Item.top = 0;
-		for (var s = 0; s < Item.seasons.length; s++) {
+		var last = Recall.get(Item.data.id), at = null, mine = null, s, e;
+		for (s = 0; s < Item.seasons.length; s++) {
 			var eps = Item.seasons[s].eps;
-			for (var e = 0; e < eps.length; e++) {
-				var st = eps[e].watching ? eps[e].watching.status : eps[e].watched;
-				if (st !== 1) { Item.si = s; Item.ei = e; Item.scroll(); return; }
+			for (e = 0; e < eps.length; e++) {
+				if (last && last.v === eps[e].number && (last.s || null) === (Item.seasons[s].number || null)) mine = { si: s, ei: e };
+				var st = Item.status(eps[e]);
+				if (st === 0 || st === 1) at = { si: s, ei: e };
 			}
 		}
+		at = mine || at;
+		if (at) {
+			Item.si = at.si; Item.ei = at.ei;
+			if (Item.status(Item.current()) === 1) {
+				var to = Item.hasNeighbour(1);
+				if (to) { Item.si = to.si; Item.ei = to.ei; }
+			}
+		}
+		Item.scroll();
 	},
+
+	status: function (ep) { return ep.watching ? ep.watching.status : ep.watched; },
 
 	scroll: function () {
 		if (Item.ei < Item.top) Item.top = Item.ei;
@@ -1243,6 +1293,12 @@ var Player = {
 		Player.time = v.start || 0; Player.duration = v.duration || 0;
 		Player.paused = false; Player.active = true; Player.seekTarget = null;
 		Player.menu = false; Player.track = 0; Player.retries = 0; $('audioMenu').style.display = 'none';
+		// same dub as last time for this title; remember the episode for the item page
+		if (!v.trailer) {
+			var last = Recall.get(v.id), ai = Recall.audioIndex(v.audios, last && last.audio);
+			if (ai >= 0 && ai < Player.trackCount()) Player.track = ai;
+			Recall.set(v.id, { s: v.season, v: v.video });
+		}
 		Player.nextAt = null; Player.nextOff = false; $('nextUp').style.display = 'none';
 		Player.renderHints();
 		// keep the subtitle language chosen for the previous episode
@@ -1519,7 +1575,11 @@ var Player = {
 		else if (k === K.ENTER) {
 			var kind = Player.menu, pick = Player.menuIdx;
 			Player.closeMenu();
-			if (kind === 'audio' && pick !== Player.track) { Player.track = pick; Player.reopen(); }
+			if (kind === 'audio' && pick !== Player.track) {
+				Player.track = pick;
+				Recall.set(Player.v.id, { audio: Recall.audioKey(Player.v.audios[pick]) });
+				Player.reopen();
+			}
 			if (kind === 'subs') Player.setSub(pick - 1);
 			return;
 		}
